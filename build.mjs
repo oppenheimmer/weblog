@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
 import { collectPosts, groupByTag, loadPost, ContentError } from "./lib/content.mjs";
+import { hasR2Config } from "./lib/server/config.mjs";
 import { postPage, listPage, tagPage, notFoundPage, tagSlug } from "./lib/templates.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
 
@@ -53,12 +54,34 @@ function loadPosts() {
   return collectPosts(posts);
 }
 
-function build() {
+/**
+ * Where content comes from (CLAUDE.md §1.1).
+ *
+ * R2 is the source of truth. The filesystem path stays for two reasons: the
+ * test harness drives it through BLOG_POSTS_DIR, and a clone of the engine with
+ * no credentials should still build something rather than crash.
+ */
+async function readPosts() {
+  if (process.env.BLOG_POSTS_DIR) {
+    console.log("  content: filesystem (BLOG_POSTS_DIR)");
+    return loadPosts();
+  }
+  if (hasR2Config()) {
+    const { loadPublishedPosts } = await import("./lib/server/published.mjs");
+    const posts = await loadPublishedPosts();
+    console.log(`  content: R2 (${posts.length} published)`);
+    return posts;
+  }
+  console.log("  content: filesystem (no R2 credentials configured)");
+  return loadPosts();
+}
+
+async function build() {
   console.log("Building blog...");
   rmrf(DIST);
   fs.mkdirSync(DIST, { recursive: true });
 
-  const posts = loadPosts();
+  const posts = await readPosts();
 
   // Per-post pages -> /<slug>/index.html (pretty URLs)
   for (const post of posts) {
@@ -79,6 +102,17 @@ function build() {
   write("404.html", notFoundPage());
 
   // Feeds + crawl files
+  // Names the revisions this build contains, so a deployment can be checked
+  // against what was actually published. No private fields, no credentials.
+  // Deliberately carries no timestamp: identical content must produce an
+  // identical build, and "when it was assembled" is not what Step 7 verifies.
+  write("build-manifest.json", JSON.stringify({
+    commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+    posts: posts.map((p) => ({
+      slug: p.slug, postId: p.postId ?? null, revisionId: p.revisionId ?? null,
+    })),
+  }, null, 2));
+
   write("feed.xml", rss(posts));
   write("sitemap.xml", sitemap(posts, tagPaths));
   write("robots.txt", robots());
@@ -110,7 +144,7 @@ function build() {
 }
 
 try {
-  build();
+  await build();
 } catch (err) {
   if (err instanceof ContentError) {
     console.error(`\nContent error: ${err.message}\n`);

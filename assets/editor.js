@@ -10,6 +10,7 @@ const els = {
     slugPreview: $("slug-preview"), description: $("description"), tags: $("tags"),
     body: $("body"), save: $("save"), newPost: $("new-post"), logout: $("logout"),
     discard: $("discard"), exportBtn: $("export"), error: $("editor-error"),
+    publish: $("publish"), publishedNote: $("editor-published"),
     conflict: $("conflict"), conflictKeep: $("conflict-keep"), conflictTheirs: $("conflict-theirs"),
     conflictDetail: $("conflict-detail"), conflictNote: $("conflict-note"),
 };
@@ -248,6 +249,40 @@ async function save({ force = false } = {}) {
 // ---------------------------------------------------------------- events
 
 els.save.addEventListener("click", guard(() => save()));
+
+els.publish.addEventListener("click", guard(async () => {
+    // Publishing freezes a *saved* revision, so save first. Publishing what is
+    // on screen while the store holds something older would put a version live
+    // that the author never saw as saved.
+    if (!state.postId || isDirty()) {
+        await save();
+        if (isDirty()) return; // the save failed; its error is already showing
+    }
+
+    els.publish.disabled = true;
+    els.publishedNote.textContent = "";
+    setStatus("publishing…");
+    try {
+        const { data } = await api("/api/publish/", {
+            method: "POST", body: { postId: state.postId },
+        });
+        setStatus(`published · v${state.version}`);
+
+        const link = document.createElement("a");
+        link.href = data.url;
+        link.textContent = data.url;
+        els.publishedNote.replaceChildren(
+            document.createTextNode(
+                data.job?.hookError
+                    ? "Published, but the rebuild was not triggered. It will appear on the next build: "
+                    : "Published. The site is rebuilding; it will appear shortly at "
+            ),
+            link
+        );
+    } finally {
+        els.publish.disabled = false;
+    }
+}));
 els.newPost.addEventListener("click", guard(newPost));
 
 els.discard.addEventListener("click", guard(async () => {
