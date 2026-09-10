@@ -423,6 +423,43 @@ a HEAD request would have created a draft. HEAD is now normalized to GET before
 any handler runs, which makes that whole class of mistake impossible rather than
 something each handler has to remember.
 
+### Done — inventory and garbage collection
+
+`inventory.json` in R2 is a tree of every post, its revisions, and its media,
+plus orphaned media and pending uploads. `formatTree` prints it readably:
+
+```
+node --env-file=.env scripts/inventory.mjs          # print the tree
+node --env-file=.env scripts/inventory.mjs --gc     # what would be swept
+node --env-file=.env scripts/inventory.mjs --gc --apply
+```
+
+The file is **derived, never maintained** — rebuilt from the published index,
+draft pointers and the objects actually present, rather than patched as things
+change. An incrementally-updated index becomes a second source of truth and
+eventually disagrees with reality, which is worst precisely when deciding what
+to delete.
+
+Collection is mark-and-sweep and deliberately timid; anything it cannot prove
+unreachable, it keeps. Four independent guards:
+
+| Guard | Why |
+| --- | --- |
+| Current published revision, current draft, its pointer, and any media owned by a live post are always reachable | Losing one loses a post |
+| Nothing younger than 1 hour is ever swept | A new object may belong to an upload or publish still in flight |
+| `sessions/` and `rate-limits/` are excluded | They expire on their own; sweeping a session signs you out |
+| Dry by default, bounded per run | The failure mode is losing work, not wasting bytes |
+
+Retention: superseded published revisions 90 days (the rollback window), draft
+history 30 days or 20 revisions per post, unattached uploads 24 hours.
+
+It runs automatically after publish, unpublish and draft discard, and never
+throws — a publish that succeeded must not be reported as failed because
+housekeeping afterwards did not.
+
+*Why this matters now:* every draft save writes an immutable revision. Without
+a sweep, autosave alone would grow the bucket forever.
+
 ### Next
 
 Publish: freeze a revision to R2, fire the deploy hook, teach the build to read

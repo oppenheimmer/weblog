@@ -10,6 +10,7 @@ import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createPublisher, PublishError, INDEX_KEY } from "../lib/server/publish.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
+import { buildInventory, collectGarbage, reachableKeys, INVENTORY_KEY } from "../lib/server/inventory.mjs";
 import { loadR2Config } from "../lib/server/config.mjs";
 
 const fireForReal = process.argv.includes("--fire-hook");
@@ -111,6 +112,44 @@ await check("unpublishing removes it but keeps the revision", async () => {
   assert(posts.length === 0, "still published");
   const keys = await store.listAll("published/posts/");
   assert(keys.length > 0, "revisions were destroyed, so rollback is impossible");
+});
+
+await check("the inventory tree describes what is actually in the bucket", async () => {
+  // Republish so there is a superseded revision to account for.
+  const current = await drafts.get(published.postId);
+  await drafts.save(published.postId, { body: "Another revision." }, current.etag);
+  const latest = await drafts.get(published.postId);
+  await publisher.publish(latest.draft);
+
+  const tree = await buildInventory(store);
+  const post = tree.posts.find((p) => p.postId === published.postId);
+  assert(post, "the post is missing from the inventory");
+  assert(post.state === "published", `expected published, got ${post.state}`);
+  assert(post.revisions.filter((r) => r.kind === "published").length >= 2,
+    "superseded revisions are not tracked");
+  assert(post.revisions.filter((r) => r.current).length >= 1, "no current revision marked");
+
+  const stored = await store.getJson(INVENTORY_KEY);
+  assert(stored, "publishing did not refresh inventory.json");
+});
+
+await check("a sweep keeps everything the live site needs", async () => {
+  const tree = await buildInventory(store);
+  const keep = reachableKeys(tree);
+  const post = tree.posts.find((p) => p.postId === published.postId);
+  assert(keep.has(`published/posts/${post.postId}/${post.publishedRevisionId}.json`),
+    "the live revision was not marked reachable");
+
+  const swept = await collectGarbage(store, { apply: false });
+  assert(swept.deleted === 0, "a dry run deleted something");
+  for (const key of swept.keys) {
+    assert(!key.includes(post.publishedRevisionId), `the live revision was marked for deletion: ${key}`);
+  }
+
+  // The site must still render after a real sweep.
+  await collectGarbage(store, { apply: true });
+  const posts = await loadPublishedPosts({ store });
+  assert(posts.length === 1, `the sweep changed what is published (${posts.length} posts)`);
 });
 
 // ---- cleanup ---------------------------------------------------------------
