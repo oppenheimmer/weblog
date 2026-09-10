@@ -287,6 +287,14 @@ test("a stale save returns 409 with the current draft, not just a rejection", as
   assert.ok(stale.json().etag, "no ETag to retry with");
 });
 
+test("HEAD is accepted wherever GET is, without each route listing it", async () => {
+  const { sessions } = harness();
+  const { cookie } = await authed(sessions);
+  const res = fakeRes();
+  await draftsIndex(fakeReq({ method: "HEAD", headers: { cookie } }), res);
+  assert.equal(res.statusCode, 200);
+});
+
 test("an unknown method is refused with an Allow header", async () => {
   const { sessions } = harness();
   const { cookie } = await authed(sessions);
@@ -294,6 +302,7 @@ test("an unknown method is refused with an Allow header", async () => {
   await draftsIndex(fakeReq({ method: "PATCH", headers: { cookie } }), res);
   assert.equal(res.statusCode, 405);
   assert.match(res.getHeader("allow"), /GET/);
+  assert.match(res.getHeader("allow"), /HEAD/);
 });
 
 // ---------------------------------------------------------------- body limits
