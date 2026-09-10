@@ -1,22 +1,26 @@
-// Tier 3 — inventory and garbage collection.
+// Tier 3 — inventory and ownership-scoped collection.
 //
-// This is the code that deletes things, so the tests are weighted towards what
-// must *survive*. A sweep that frees no bytes is a minor waste; a sweep that
-// removes a published revision loses a post.
+// This is the code that deletes things, so the tests weight heavily towards
+// what must *survive*. The headline property is the blast radius: deleting one
+// post must be incapable of touching another, by construction rather than by
+// care.
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
-import { createPublisher, INDEX_KEY, revisionKey } from "../lib/server/publish.mjs";
+import { createPublisher, INDEX_KEY } from "../lib/server/publish.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
+import { keys, classifyKey, ownedPrefixes, mediaUrl } from "../lib/server/keys.mjs";
 import {
-  buildInventory, reachableKeys, collectGarbage, refreshInventory,
-  formatTree, INVENTORY_KEY, RETENTION,
+  buildInventory, collectableForPost, collectGarbage, deletePostObjects,
+  refreshInventory, formatTree, INVENTORY_KEY,
 } from "../lib/server/inventory.mjs";
 import { createFakeS3, FAKE_CONFIG } from "./helpers/fake-r2.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
+const A = "p_00000000000000aa";
+const B = "p_00000000000000bb";
 
 function harness() {
   const client = createFakeS3();
@@ -28,63 +32,106 @@ function harness() {
   };
 }
 
-/** Backdate an object so age-based rules can be exercised without waiting. */
-function backdate(client, keySuffix, ms) {
+/** Backdate matching objects so age rules can run without waiting. */
+function backdate(client, match, ms) {
   for (const [key, value] of client.objects) {
-    if (key.endsWith(keySuffix)) value.lastModified = new Date(Date.now() - ms);
+    if (key.includes(match)) value.lastModified = new Date(Date.now() - ms);
   }
 }
 
 const complete = (over = {}) => ({
-  postId: "p_00000000000000aa", revisionId: "r_000001_abc_1234", version: 1,
+  postId: A, revisionId: "r_000001_abc_1234", version: 1,
   title: "A post", date: "2026-07-01", description: "", tags: ["meta"],
   format: "markdown", body: "Body.", slug: "a-post", ...over,
 });
 
-// ---------------------------------------------------------------- the tree
+// ---------------------------------------------------------------- ownership
 
-test("the tree lists posts, their revisions and which one is current", async () => {
-  const { store, publisher } = harness();
-  await publisher.publish(complete());
-  await publisher.publish(complete({ revisionId: "r_000002_bbb_5678", body: "Revised." }));
-
-  const tree = await buildInventory(store);
-  assert.equal(tree.posts.length, 1);
-  const post = tree.posts[0];
-  assert.equal(post.slug, "a-post");
-  assert.equal(post.state, "published");
-  assert.equal(post.publishedRevisionId, "r_000002_bbb_5678");
-  assert.equal(post.revisions.filter((r) => r.kind === "published").length, 2);
-  assert.equal(post.revisions.filter((r) => r.current).length, 1);
+test("every content key names its owning post", () => {
+  const cases = [
+    [keys.draftPointer(A), "draft-pointer"],
+    [keys.draftRevision(A, "r_000001_x_1"), "draft-revision"],
+    [keys.publishedRevision(A, "r_000001_x_1"), "published-revision"],
+    [keys.media(A, "diagram.png"), "media"],
+    [keys.upload(A, "u_1", "pending.png"), "upload"],
+  ];
+  for (const [key, kind] of cases) {
+    const info = classifyKey(key);
+    assert.equal(info.kind, kind, key);
+    assert.equal(info.owned, true, key);
+    assert.equal(info.postId, A, `${key} did not name its owner`);
+  }
 });
 
-test("drafts appear alongside published posts", async () => {
-  const { store, drafts } = harness();
-  await drafts.create({ title: "Just a draft", body: "text" });
-  const tree = await buildInventory(store);
-  assert.equal(tree.posts[0].state, "draft");
-  assert.equal(tree.posts[0].title, "Just a draft");
-  assert.ok(tree.posts[0].draftRevisionId);
+test("shared records belong to no post and are never owned", () => {
+  for (const key of [
+    keys.publishedIndex, keys.inventory, keys.job("j_1"),
+    keys.session("abc"), "rate-limits/1000/client-x.json",
+  ]) {
+    const info = classifyKey(key);
+    assert.equal(info.owned, false, key);
+    assert.equal(info.postId, null, key);
+  }
 });
 
-test("the tree is derived, so it cannot drift from the bucket", async () => {
-  const { store, publisher } = harness();
-  await publisher.publish(complete());
-  await refreshInventory(store);
-
-  // Change the world behind the inventory file's back.
-  await publisher.unpublish("a-post");
-  const rebuilt = await buildInventory(store);
-  assert.notEqual(rebuilt.posts[0]?.state, "published",
-    "the rebuilt tree repeated a stale claim instead of reading the bucket");
+test("an unrecognised key is reported, never claimed by a post", () => {
+  const info = classifyKey("something/unexpected.bin");
+  assert.equal(info.kind, "unknown");
+  assert.equal(info.owned, false);
 });
 
-test("the tree renders as readable text", async () => {
-  const { store, publisher } = harness();
+test("storage is keyed by post id while public URLs stay slug-based", () => {
+  assert.match(keys.media(A, "diagram.png"), /published\/media\/p_00000000000000aa\/diagram\.png/);
+  assert.equal(mediaUrl("a-post", "diagram.png"), "/images/uploads/a-post/diagram.png");
+});
+
+// ------------------------------------------------- the blast-radius property
+
+test("deleting one post cannot touch another post's objects", async () => {
+  const { store, publisher, client } = harness();
   await publisher.publish(complete());
-  const text = formatTree(await buildInventory(store));
-  assert.match(text, /a-post/);
-  assert.match(text, /published revisions/);
+  await publisher.publish(complete({ postId: B, slug: "b-post", title: "B", revisionId: "r_000001_bbb_1" }));
+  await store.put(keys.media(A, "a.png"), Buffer.from("a"));
+  await store.put(keys.media(B, "b.png"), Buffer.from("b"));
+
+  const before = [...client.objects.keys()].filter((k) => classifyKey(k).postId === B);
+  await deletePostObjects(store, A, { apply: true });
+
+  const survived = [...client.objects.keys()].filter((k) => classifyKey(k).postId === B);
+  assert.deepEqual(survived.sort(), before.sort(), "deleting post A disturbed post B");
+  assert.equal(
+    [...client.objects.keys()].filter((k) => classifyKey(k).postId === A).length, 0,
+    "post A's objects were not all removed"
+  );
+});
+
+test("a post deletion refuses to touch a key it does not own", async () => {
+  const { store } = harness();
+  // A store whose listing lies, returning another post's key.
+  const lying = { ...store, listAll: async () => [{ key: keys.media(B, "stolen.png"), size: 1 }] };
+  await assert.rejects(
+    () => deletePostObjects(lying, A, { apply: true }),
+    /refusing to delete keys not owned by p_00000000000000aa/
+  );
+});
+
+test("collection for one post names only that post's keys", async () => {
+  const { store, drafts, client } = harness();
+  const first = await drafts.create({ title: "First", body: "v1" });
+  const second = await drafts.create({ title: "Second", body: "v1" });
+  let etag = first.etag;
+  for (let i = 2; i <= 30; i++) {
+    ({ etag } = await drafts.save(first.draft.postId, { body: `v${i}` }, etag));
+  }
+  backdate(client, "", 90 * DAY);
+
+  const swept = await collectGarbage(store, { apply: false, postId: first.draft.postId });
+  assert.ok(swept.deletable > 0);
+  for (const key of swept.keys) {
+    assert.equal(classifyKey(key).postId, first.draft.postId,
+      `scoped collection named a foreign key: ${key}`);
+  }
+  assert.ok(!swept.keys.some((k) => k.includes(second.draft.postId)));
 });
 
 // ------------------------------------------------------ what must survive
@@ -92,30 +139,32 @@ test("the tree renders as readable text", async () => {
 test("a current published revision is never collectable", async () => {
   const { store, publisher, client } = harness();
   await publisher.publish(complete());
-  backdate(client, ".json", 400 * DAY); // older than every retention window
+  backdate(client, "", 400 * DAY); // older than every window
 
-  const swept = await collectGarbage(store, { apply: true });
-  assert.ok(!swept.keys.includes(revisionKey("p_00000000000000aa", "r_000001_abc_1234")),
-    "the live revision was deleted");
+  await collectGarbage(store, { apply: true });
   const posts = await loadPublishedPosts({ store });
-  assert.equal(posts.length, 1, "the post disappeared from the site");
+  assert.equal(posts.length, 1, "the live post disappeared");
 });
 
-test("the published index and inventory file are never collectable", async () => {
+test("shared records are never collectable", async () => {
   const { store, publisher, client } = harness();
   await publisher.publish(complete());
   await refreshInventory(store);
-  backdate(client, ".json", 400 * DAY);
+  await store.putJson(keys.session("abc"), { tokenHash: "abc" });
+  await store.putJson("rate-limits/1000/client-x.json", { count: 1 });
+  backdate(client, "", 400 * DAY);
 
   const swept = await collectGarbage(store, { apply: true });
-  assert.ok(!swept.keys.includes(INDEX_KEY), "the published index was deleted");
-  assert.ok(!swept.keys.includes(INVENTORY_KEY), "the inventory itself was deleted");
+  for (const key of [INDEX_KEY, INVENTORY_KEY, keys.session("abc")]) {
+    assert.ok(!swept.keys.includes(key), `${key} was collected`);
+  }
+  assert.ok(await store.getJson(keys.session("abc")), "a live session was swept, signing the owner out");
 });
 
-test("a draft's current revision and pointer survive", async () => {
+test("an open draft survives any age", async () => {
   const { store, drafts, client } = harness();
   const { draft } = await drafts.create({ title: "Live draft", body: "text" });
-  backdate(client, ".json", 400 * DAY);
+  backdate(client, "", 400 * DAY);
 
   await collectGarbage(store, { apply: true });
   const found = await drafts.get(draft.postId);
@@ -123,90 +172,92 @@ test("a draft's current revision and pointer survive", async () => {
   assert.equal(found.draft.title, "Live draft");
 });
 
-test("nothing recent is ever swept, whatever the graph says", async () => {
+test("nothing recent is swept, whatever the rules say", async () => {
   const { store, drafts } = harness();
   const created = await drafts.create({ title: "T", body: "v1" });
   let etag = created.etag;
   for (const body of ["v2", "v3"]) {
     ({ etag } = await drafts.save(created.draft.postId, { body }, etag));
   }
-  // Superseded revisions exist, but everything was written moments ago: an
-  // object seconds old may belong to a workflow still in flight.
   const swept = await collectGarbage(store, { apply: false });
   assert.equal(swept.deletable, 0, "a freshly written object was marked for deletion");
 });
 
-test("sessions and rate limits are left to their own expiry", async () => {
+test("unrecognised keys are reported but never deleted", async () => {
   const { store, client } = harness();
-  await store.putJson("sessions/abc.json", { tokenHash: "abc" });
-  await store.putJson("rate-limits/1000/client-x.json", { count: 1 });
-  backdate(client, ".json", 400 * DAY);
+  await store.put("something/unexpected.bin", Buffer.from("x"));
+  backdate(client, "", 400 * DAY);
 
-  const swept = await collectGarbage(store, { apply: false });
-  assert.ok(!swept.keys.some((k) => k.startsWith("sessions/")), "a session was swept");
-  assert.ok(!swept.keys.some((k) => k.startsWith("rate-limits/")), "a rate-limit window was swept");
+  const swept = await collectGarbage(store, { apply: true });
+  assert.ok(swept.unknownKeys.includes("something/unexpected.bin"));
+  assert.ok(!swept.keys.includes("something/unexpected.bin"), "an unrecognised key was deleted");
+  assert.ok(await store.get("something/unexpected.bin"), "the object is gone");
 });
 
 // ------------------------------------------------------ what gets collected
 
-test("superseded published revisions survive the rollback window and go after it", async () => {
+test("a post nothing references any more is collectable in full", async () => {
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  await store.put(keys.media(A, "diagram.png"), Buffer.from("bytes"));
+  await publisher.unpublish("a-post");
+  backdate(client, "", 400 * DAY);
+
+  const tree = await buildInventory(store);
+  assert.deepEqual(tree.orphanPostIds, [A], "the unreferenced post was not seen as orphaned");
+  const doomed = collectableForPost(tree.posts[0]);
+  assert.ok(doomed.some((d) => d.key === keys.media(A, "diagram.png")), "its media was kept");
+});
+
+test("superseded revisions survive the rollback window and go after it", async () => {
   const { store, publisher, client } = harness();
   await publisher.publish(complete());
   await publisher.publish(complete({ revisionId: "r_000002_bbb_5678", body: "Revised." }));
-  const superseded = revisionKey("p_00000000000000aa", "r_000001_abc_1234");
+  const superseded = keys.publishedRevision(A, "r_000001_abc_1234");
 
-  backdate(client, "r_000001_abc_1234.json", 30 * DAY);
-  let keep = reachableKeys(await buildInventory(store));
-  assert.ok(keep.has(superseded), "rollback was made impossible inside the window");
+  backdate(client, "r_000001_abc_1234", 30 * DAY);
+  let tree = await buildInventory(store);
+  let doomed = collectableForPost(tree.posts[0]).map((d) => d.key);
+  assert.ok(!doomed.includes(superseded), "rollback was made impossible inside the window");
 
-  backdate(client, "r_000001_abc_1234.json", 200 * DAY);
-  keep = reachableKeys(await buildInventory(store));
-  assert.ok(!keep.has(superseded), "a revision past the rollback window was kept forever");
+  backdate(client, "r_000001_abc_1234", 200 * DAY);
+  tree = await buildInventory(store);
+  doomed = collectableForPost(tree.posts[0]).map((d) => d.key);
+  assert.ok(doomed.includes(superseded), "a revision past the rollback window was kept forever");
 });
 
-test("old draft history is pruned but the post survives", async () => {
+test("old draft history is pruned but the draft survives", async () => {
   const { store, drafts, client } = harness();
   const created = await drafts.create({ title: "T", body: "v1" });
   let etag = created.etag;
   for (let i = 2; i <= 30; i++) {
     ({ etag } = await drafts.save(created.draft.postId, { body: `v${i}` }, etag));
   }
-  backdate(client, ".json", 90 * DAY);
+  backdate(client, "", 90 * DAY);
 
   const swept = await collectGarbage(store, { apply: true });
-  assert.ok(swept.deleted > 0, "30 draft revisions produced nothing to prune");
+  assert.ok(swept.deleted > 0, "30 revisions produced nothing to prune");
 
   const found = await drafts.get(created.draft.postId);
   assert.ok(found, "pruning history destroyed the draft");
   assert.equal(found.draft.body, "v30");
 });
 
-test("media belonging to a deleted post becomes collectable", async () => {
-  const { store, publisher, client } = harness();
-  await publisher.publish(complete());
-  await store.put("published/media/a-post/diagram.png", Buffer.from("bytes"));
+test("abandoned uploads go after their window, not before", async () => {
+  const { store, drafts, client } = harness();
+  const { draft } = await drafts.create({ title: "T", body: "x" });
+  await store.put(keys.upload(draft.postId, "u_1", "pending.png"), Buffer.from("bytes"));
 
+  backdate(client, "pending.png", 2 * 60 * 60 * 1000); // past minAge, inside 24h
   let tree = await buildInventory(store);
-  assert.equal(tree.posts[0].media.length, 1, "media was not attributed to its post");
-  assert.ok(reachableKeys(tree).has("published/media/a-post/diagram.png"));
-
-  await publisher.unpublish("a-post");
-  backdate(client, "diagram.png", 400 * DAY);
-  tree = await buildInventory(store);
-  assert.equal(tree.orphanMedia.length, 1, "media of a removed post was not seen as orphaned");
-  assert.ok(!reachableKeys(tree).has("published/media/a-post/diagram.png"));
-});
-
-test("abandoned uploads are collected after their window", async () => {
-  const { store, client } = harness();
-  await store.put("uploads/u_123/pending.png", Buffer.from("bytes"));
-
-  backdate(client, "pending.png", 2 * 60 * 60 * 1000); // 2 hours: past minAge, inside 24h
-  assert.ok(reachableKeys(await buildInventory(store)).has("uploads/u_123/pending.png"),
+  let post = tree.posts.find((p) => p.postId === draft.postId);
+  assert.ok(!collectableForPost(post).some((d) => d.name === "pending.png"),
     "an upload was collected while still within its window");
 
   backdate(client, "pending.png", 3 * DAY);
-  assert.ok(!reachableKeys(await buildInventory(store)).has("uploads/u_123/pending.png"));
+  tree = await buildInventory(store);
+  post = tree.posts.find((p) => p.postId === draft.postId);
+  assert.ok(collectableForPost(post).some((d) => d.name === "pending.png"));
 });
 
 // ---------------------------------------------------------------- safety
@@ -218,7 +269,7 @@ test("collection is dry by default", async () => {
   for (let i = 2; i <= 30; i++) {
     ({ etag } = await drafts.save(created.draft.postId, { body: `v${i}` }, etag));
   }
-  backdate(client, ".json", 90 * DAY);
+  backdate(client, "", 90 * DAY);
 
   const before = client.objects.size;
   const swept = await collectGarbage(store);
@@ -235,7 +286,7 @@ test("a sweep is bounded, so one run cannot delete everything", async () => {
   for (let i = 2; i <= 40; i++) {
     ({ etag } = await drafts.save(created.draft.postId, { body: `v${i}` }, etag));
   }
-  backdate(client, ".json", 90 * DAY);
+  backdate(client, "", 90 * DAY);
 
   const swept = await collectGarbage(store, { apply: true, maxDeletions: 3 });
   assert.equal(swept.deleted, 3);
@@ -244,22 +295,62 @@ test("a sweep is bounded, so one run cannot delete everything", async () => {
 
 test("housekeeping failure never propagates to the caller", async () => {
   const { store, publisher } = harness();
-  // A store whose listing is broken would otherwise fail the sweep.
   const broken = { ...store, listAll: async () => { throw new Error("R2 unreachable"); } };
   const { onStateChange } = await import("../lib/server/inventory.mjs");
-  const result = await onStateChange(broken);
-  assert.equal(result.ok, false, "a broken sweep was reported as success");
+  assert.equal((await onStateChange(broken)).ok, false, "a broken sweep reported success");
 
-  // And a real publish still succeeds and is readable.
   const job = await publisher.publish(complete());
   assert.equal(job.state, "building");
   assert.equal((await loadPublishedPosts({ store })).length, 1);
+});
+
+// ---------------------------------------------------------------- the tree
+
+test("the tree lists posts, revisions and which one is current", async () => {
+  const { store, publisher } = harness();
+  await publisher.publish(complete());
+  await publisher.publish(complete({ revisionId: "r_000002_bbb_5678", body: "Revised." }));
+
+  const tree = await buildInventory(store);
+  const post = tree.posts[0];
+  assert.equal(post.slug, "a-post");
+  assert.equal(post.state, "published");
+  assert.equal(post.publishedRevisionId, "r_000002_bbb_5678");
+  assert.equal(post.revisions.filter((r) => r.current).length, 1);
+});
+
+test("the tree is derived, so it cannot repeat a stale claim", async () => {
+  const { store, publisher } = harness();
+  await publisher.publish(complete());
+  await refreshInventory(store);
+  await publisher.unpublish("a-post");
+
+  const rebuilt = await buildInventory(store);
+  assert.notEqual(rebuilt.posts[0]?.state, "published",
+    "the rebuilt tree trusted the stored file instead of the bucket");
 });
 
 test("publishing refreshes the inventory automatically", async () => {
   const { store, publisher } = harness();
   await publisher.publish(complete());
   const stored = await store.getJson(INVENTORY_KEY);
-  assert.ok(stored, "no inventory was written after a publish");
-  assert.equal(stored.data.posts[0].slug, "a-post");
+  assert.equal(stored?.data.posts[0].slug, "a-post");
+});
+
+test("the tree renders as readable text", async () => {
+  const { store, publisher } = harness();
+  await publisher.publish(complete());
+  const text = formatTree(await buildInventory(store));
+  assert.match(text, /a-post/);
+  assert.match(text, /published revisions/);
+});
+
+test("ownedPrefixes covers every place a post can have objects", () => {
+  const prefixes = ownedPrefixes(A);
+  for (const key of [
+    keys.draftPointer(A), keys.draftRevision(A, "r_1"),
+    keys.publishedRevision(A, "r_1"), keys.media(A, "x.png"), keys.upload(A, "u", "x.png"),
+  ]) {
+    assert.ok(prefixes.some((p) => key.startsWith(p)), `${key} is not under any owned prefix`);
+  }
 });

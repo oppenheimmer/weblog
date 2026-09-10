@@ -21,7 +21,10 @@ if (!gc) {
 
 const swept = await collectGarbage(store, { apply, inventory });
 console.log(`\n${apply ? "Swept" : "Would sweep"} ${swept.deletable} object(s), ` +
-  `${(swept.bytesFreed / 1024).toFixed(1)} KB; kept ${swept.kept} reachable.`);
+  `${(swept.bytesFreed / 1024).toFixed(1)} KB, of ${swept.scanned} scanned.`);
+if (swept.unknownKeys.length) {
+  console.log(`${swept.unknownKeys.length} unrecognised key(s) left alone.`);
+}
 for (const key of swept.keys) console.log(`  ${apply ? "deleted" : "would delete"}  ${key}`);
 if (swept.truncated) console.log("  … more remain; run again.");
 if (!apply && swept.deletable) console.log("\nRe-run with --apply to delete.");

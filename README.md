@@ -440,14 +440,37 @@ change. An incrementally-updated index becomes a second source of truth and
 eventually disagrees with reality, which is worst precisely when deciding what
 to delete.
 
-Collection is mark-and-sweep and deliberately timid; anything it cannot prove
-unreachable, it keeps. Four independent guards:
+Collection is **ownership-scoped**, not reachability-scoped. Every object
+carries its owning post's id in its key (`lib/server/keys.mjs`), so deletion is
+always scoped to one post:
+
+```
+drafts/<postId>/current.json
+drafts/<postId>/revisions/<revisionId>.json
+published/posts/<postId>/<revisionId>.json
+published/media/<postId>/<name>        -> /images/uploads/<slug>/<name>
+uploads/<postId>/<uploadId>/<name>
+```
+
+That bounds the blast radius. A global mark-and-sweep that misses one edge
+deletes across every post; here a mistake can only damage the post already being
+worked on, and other posts' objects are unreachable **by construction** rather
+than by care. `deletePostObjects` re-checks every key it collected and refuses
+outright if one is not owned by the post being deleted.
+
+Keys use the post **id**, never the slug — slugs are human-chosen and reusable,
+so a new post could otherwise inherit a deleted one's directory. Public URLs stay
+slug-based and readable; the build maps between them. Nothing is shared between
+posts, so the same image in three posts is stored three times: that forgoes
+deduplication so deleting one post can never remove a file another still uses.
+
+Four further guards:
 
 | Guard | Why |
 | --- | --- |
-| Current published revision, current draft, its pointer, and any media owned by a live post are always reachable | Losing one loses a post |
+| Current published revision, current draft and its pointer are never collectable | Losing one loses a post |
 | Nothing younger than 1 hour is ever swept | A new object may belong to an upload or publish still in flight |
-| `sessions/` and `rate-limits/` are excluded | They expire on their own; sweeping a session signs you out |
+| Keys matching no known pattern are reported, never deleted | Far likelier that `keys.mjs` is out of date than that the object is rubbish |
 | Dry by default, bounded per run | The failure mode is losing work, not wasting bytes |
 
 Retention: superseded published revisions 90 days (the rollback window), draft

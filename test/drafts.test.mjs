@@ -215,8 +215,9 @@ test("removing a draft takes its revisions with it", async () => {
   const created = await drafts.create({ title: "Doomed", body: "v1" });
   await drafts.save(created.draft.postId, { body: "v2" }, created.etag);
 
+  // Counts every object the post owned: the pointer plus both revisions.
   const removed = await drafts.remove(created.draft.postId);
-  assert.equal(removed, 2);
+  assert.equal(removed, 3);
   assert.equal(await drafts.get(created.draft.postId), null);
   assert.deepEqual(await drafts.revisions(created.draft.postId), []);
 });

@@ -10,7 +10,7 @@ import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createPublisher, PublishError, INDEX_KEY } from "../lib/server/publish.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
-import { buildInventory, collectGarbage, reachableKeys, INVENTORY_KEY } from "../lib/server/inventory.mjs";
+import { buildInventory, collectGarbage, collectableForPost, INVENTORY_KEY } from "../lib/server/inventory.mjs";
 import { loadR2Config } from "../lib/server/config.mjs";
 
 const fireForReal = process.argv.includes("--fire-hook");
@@ -135,15 +135,20 @@ await check("the inventory tree describes what is actually in the bucket", async
 
 await check("a sweep keeps everything the live site needs", async () => {
   const tree = await buildInventory(store);
-  const keep = reachableKeys(tree);
   const post = tree.posts.find((p) => p.postId === published.postId);
-  assert(keep.has(`published/posts/${post.postId}/${post.publishedRevisionId}.json`),
-    "the live revision was not marked reachable");
+  const doomed = collectableForPost(post).map((d) => d.key);
+  assert(!doomed.some((k) => k.includes(post.publishedRevisionId)),
+    "the live revision was marked collectable");
 
   const swept = await collectGarbage(store, { apply: false });
   assert(swept.deleted === 0, "a dry run deleted something");
   for (const key of swept.keys) {
     assert(!key.includes(post.publishedRevisionId), `the live revision was marked for deletion: ${key}`);
+  }
+  // Every key a sweep names must belong to a post it was scoped to.
+  const { classifyKey } = await import("../lib/server/keys.mjs");
+  for (const key of swept.keys) {
+    assert(classifyKey(key).owned, `a sweep named an unowned key: ${key}`);
   }
 
   // The site must still render after a real sweep.
