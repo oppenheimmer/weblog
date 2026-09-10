@@ -387,9 +387,41 @@ with no cookie set.
 - Production uses `R2_PREFIX=prod`; local development defaults to `dev`, so
   local work cannot touch published data.
 
+### Done — editor and login pages
+
+`/login/` and `/editor/` are served by functions, never emitted into `dist/` —
+anything in `dist/` is public and the editor markup must not be. An
+unauthenticated `/editor/` redirects to `/login/` rather than returning a JSON
+401, since it is a browser navigation; `/login/` redirects back when a session
+already exists.
+
+Editor pages send a strict CSP with **no inline script**, plus `noindex`,
+`nosniff` and `no-store`. §3.1 of the plan records why that is required rather
+than nice to have: the editor shares an origin with published posts that can
+carry custom JavaScript.
+
+The client is dependency-free — metadata fields, a textarea, conditional saves,
+Ctrl/Cmd-S, and a `beforeunload` guard.
+
+- "Unsaved" is a comparison against what was last persisted, not a flag that can
+  drift out of sync with the fields.
+- A 409 opens a dialog rather than resolving silently. Both versions are real
+  work, and the wording says plainly which button discards what.
+- A 401 mid-session does **not** clear the editor. It says the session ended and
+  points at Export, which writes the current text to a local file and depends on
+  neither the network nor the session.
+
+*Bug worth remembering:* accepting HEAD wherever GET is allowed, but passing it
+through unchanged, meant `HEAD /api/drafts/` reached the create branch —
+handlers dispatch on `req.method` with the mutating path as the fall-through, so
+a HEAD request would have created a draft. HEAD is now normalized to GET before
+any handler runs, which makes that whole class of mistake impossible rather than
+something each handler has to remember.
+
 ### Next
 
-The editor page itself, auth, uploads,
+Publish: freeze a revision to R2, fire the deploy hook, teach the build to read
+from R2, and migrate `content/posts/` out of the repo, auth, uploads,
 the editor UI, and finally publication + the migration that empties
 `content/posts/` and `assets/images/` into R2.
 
