@@ -148,6 +148,55 @@ test("tripwire: listing content is visible without JavaScript and under reduced 
   }
 });
 
+/** Does `css` set `display` to something other than none for `selector`? */
+function setsDisplay(css, selector) {
+  const pattern = new RegExp(
+    `(^|,|\\})\\s*[^{}]*\\${selector}[^{},]*\\{[^}]*display\\s*:\\s*(?!none)[a-z-]+`,
+    "m"
+  );
+  return pattern.test(css);
+}
+
+/** Is there a rule that hides `selector` when it carries the hidden attribute? */
+function neutralizesHidden(css, selector) {
+  if (/\[hidden\][^{]*\{[^}]*display\s*:\s*none\s*!important/.test(css)) return true;
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${escaped}\\[hidden\\][^{]*\\{[^}]*display\\s*:\\s*none`).test(css);
+}
+
+test("tripwire: elements toggled with el.hidden actually hide", () => {
+  // The `hidden` attribute hides only through the UA stylesheet, so any
+  // author-level `display` on the same element wins and it never goes away.
+  // This shipped once: the editor's conflict dialog set `display: grid`, so it
+  // covered the page permanently and `el.hidden = true` could not dismiss it,
+  // which made its own buttons look broken.
+  //
+  // Either fix is fine — a global backstop, or a targeted `sel[hidden]` rule.
+  // What must not happen is a display rule with neither.
+  const strip = (file) =>
+    fs.readFileSync(path.join(ROOT, "assets", "styles", file), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  const toggled = [
+    // blog.js toggles these on the public site.
+    ["blog.css", ".mobile-menu"],
+    ["blog.css", ".menu-icon"],
+    // editor.js toggles these.
+    ["editor.css", ".conflict"],
+    ["editor.css", ".sidebar-empty"],
+  ];
+
+  for (const [file, selector] of toggled) {
+    const css = strip(file);
+    if (!setsDisplay(css, selector)) continue; // no display rule, so hidden works
+    assert.ok(
+      neutralizesHidden(css, selector),
+      `${file}: "${selector}" sets display but nothing neutralizes it when the ` +
+      `hidden attribute is present, so el.hidden = true will not hide it`
+    );
+  }
+});
+
 test("tripwire: the post listing exposes a well-formed table to assistive tech", () => {
   const dist = buildFixtures();
   try {

@@ -1,6 +1,15 @@
 /* Editor chrome. Layers on top of blog.css and reuses its tokens, so the
    editor looks like the blog rather than like a separate admin tool. */
 
+/* The `hidden` attribute only hides via the UA stylesheet, so any author-level
+   `display` beats it. The conflict dialog sets `display: grid` and was
+   therefore permanently visible, covering the page — and `el.hidden = true`
+   could not put it away again, which made its own buttons look dead. Anything
+   toggled with `el.hidden` needs this backstop. */
+[hidden] {
+    display: none !important;
+}
+
 .editor-body {
     min-height: 100vh;
     background: var(--bg, #f7f9fb);
