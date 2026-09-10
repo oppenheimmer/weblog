@@ -351,9 +351,45 @@ rotated.
 saves in the same millisecond sorted by their random suffix. Debounced autosave
 does exactly that. Ids are now version-led, which cannot tie.
 
+### Done — editor API
+
+Routes under `api/`: login, logout, session, list/create drafts,
+get/save/delete a draft. Guards live in `lib/server/http.mjs`, not in each
+handler, so adding a route cannot accidentally omit one — a route opts *out*
+explicitly and never has to remember to opt in.
+
+Verified against the live deployment: anonymous callers get 401 on every
+private route, a cross-origin login gets 403, and a wrong password gets 401
+with no cookie set.
+
+- Login is rate limited *before* the password is read, so a locked-out caller
+  cannot keep paying for scrypt work. Wrong password, absent password and an
+  unconfigured server are indistinguishable in the response.
+- Origins are matched exactly. A suffix test is how this check usually gets
+  defeated; there is a test for `blog.souravmishra.net.attacker.com`.
+- A missing `Origin` on a mutation is refused, not allowed — browsers always
+  send it there, so its absence means something that is not a browser.
+- A stale save returns **409 carrying the current draft and its ETag**, so the
+  editor can show a real diff rather than reporting that work vanished.
+  Saving with no ETag is 428, never a silent clobber.
+
+*Deployment findings worth keeping:*
+
+- `trailingSlash` in `vercel.json` applies to API routes too, so `/api/x`
+  308-redirects to `/api/x/`. POST survives it with the method intact, but the
+  editor calls API paths **with** the trailing slash to skip the round trip.
+  Removing `trailingSlash` is not an option — the public post URLs and their
+  canonical tags depend on it.
+- Vercel serves `api/` functions alongside a static `outputDirectory`, imports
+  from `lib/` outside `api/` resolve once bundled, and the function reaches R2
+  with production credentials. Confirmed by a throwaway probe rather than
+  assumed.
+- Production uses `R2_PREFIX=prod`; local development defaults to `dev`, so
+  local work cannot touch published data.
+
 ### Next
 
-The `api/` routes, auth, uploads,
+The editor page itself, auth, uploads,
 the editor UI, and finally publication + the migration that empties
 `content/posts/` and `assets/images/` into R2.
 
