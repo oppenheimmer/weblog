@@ -1,0 +1,29 @@
+{
+  "name": "website-blog",
+  "version": "1.0.0",
+  "description": "Sourav Mishra's blog \u2014 a tiny Markdown static site generator with build-time KaTeX math.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
+    "dev": "node build.mjs && npx --yes serve dist -l 4321",
+    "test": "node --test test/",
+    "test:bless": "node test/helpers/bless.mjs"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "dependencies": {
+    "@unified-latex/unified-latex-to-hast": "^1.8.4",
+    "@unified-latex/unified-latex-util-parse": "^1.8.4",
+    "gray-matter": "^4.0.3",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.11",
+    "markdown-it": "^14.1.0",
+    "markdown-it-anchor": "^9.2.0",
+    "markdown-it-texmath": "^1.0.0",
+    "rehype-stringify": "^10.0.1",
+    "unified": "^11.0.5"
+  }
+}

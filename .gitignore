@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.vercel
+
+# Local environment files (never commit secrets; .env.example is the template)
+.env
+.env.*
+!.env.example
+
+# Private planning / agent context. Holds the full authoring-system design:
+# endpoint contract, session and cookie configuration, rate-limit thresholds,
+# lockout recovery, and review notes on known weaknesses. This repository is
+# public, so none of it belongs in a commit.
+CLAUDE.md
+AGENTS.md
+PLAN.md

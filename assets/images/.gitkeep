@@ -1,0 +1,3 @@
+# Global media folder. Drop images here; reference them as /images/<file>
+# from any post (Markdown ![alt](/images/foo.png) or LaTeX \includegraphics{/images/foo.png}).
+# Subfolders are allowed and preserved (e.g. /images/2026/foo.png).
