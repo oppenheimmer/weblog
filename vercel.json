@@ -2,6 +2,24 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/editor",
+      "destination": "/api/editor"
+    },
+    {
+      "source": "/editor/",
+      "destination": "/api/editor"
+    },
+    {
+      "source": "/login",
+      "destination": "/api/login"
+    },
+    {
+      "source": "/login/",
+      "destination": "/api/login"
+    }
+  ],
   "cleanUrls": true,
   "trailingSlash": true,
   "headers": [
