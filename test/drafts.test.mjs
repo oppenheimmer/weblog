@@ -171,10 +171,23 @@ test("every save leaves an immutable revision behind", async () => {
   assert.deepEqual(bodies, ["v1", "v2", "v3"], "revisions are not in chronological order");
 });
 
-test("revision ids sort chronologically as plain strings", () => {
-  const ids = [newRevisionId(1_000), newRevisionId(2_000_000_000_000), newRevisionId(1_700_000_000_000)];
-  const sorted = [...ids].sort();
-  assert.deepEqual(sorted, [ids[0], ids[2], ids[1]]);
+test("revision ids sort by version as plain strings", () => {
+  const ids = [newRevisionId(3), newRevisionId(1), newRevisionId(12), newRevisionId(2)];
+  assert.deepEqual([...ids].sort(), [ids[1], ids[3], ids[0], ids[2]]);
+});
+
+test("revision ids stay ordered when saves land in the same millisecond", () => {
+  // Debounced autosave does exactly this. An earlier timestamp-led id let the
+  // random suffix decide the order here.
+  const frozen = 1_700_000_000_000;
+  const ids = Array.from({ length: 25 }, (_, i) => newRevisionId(i + 1, frozen));
+  assert.deepEqual([...ids].sort(), ids, "same-millisecond revisions sorted out of order");
+});
+
+test("a revision id demands a real version rather than silently defaulting", () => {
+  assert.throws(() => newRevisionId(), TypeError);
+  assert.throws(() => newRevisionId(0), TypeError);
+  assert.throws(() => newRevisionId("2"), TypeError);
 });
 
 // ---------------------------------------------------------------- listing

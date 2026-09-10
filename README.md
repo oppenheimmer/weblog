@@ -315,6 +315,42 @@ it over to March 2. Validation now round-trips the parsed date and compares.
 Revision ids are time-prefixed base36, so they sort chronologically as plain
 strings and history needs a listing rather than a read of every object.
 
+### Done — auth primitives
+
+`passwords.mjs`, `sessions.mjs`, `rate-limit.mjs`. Not yet wired to routes.
+
+- **Password.** scrypt via `node:crypto`, parameters stored inside the hash
+  string so cost can be raised later without invalidating the existing password.
+  Benchmarked on this machine: 63 ms at N=2^15, 261 ms at N=2^17 (~128 MB).
+  Settled on 2^17 — login happens about once per idle window, so a quarter
+  second is imperceptible and four times the work for anyone cracking a stolen
+  hash offline. Set one with `node scripts/set-password.mjs`, which prompts with
+  echo off and refuses to read from a pipe.
+- **Sessions.** Random tokens, only their SHA-256 stored, so read access to the
+  bucket hands over nothing usable. Idle timeout of 8 h refreshed on activity,
+  hard 7-day ceiling. Expiry is enforced on every read, not by a sweep — a
+  record that outlives its deadline never authenticates even if cleanup has not
+  run. Rotating `AUTH_VERSION` revokes everything at once.
+- **CSRF.** Derived from the session's own secret by HMAC rather than stored, so
+  there is no second record to keep in sync and a token lifted from one session
+  cannot be replayed against another.
+- **Rate limiting.** Durable in R2, because serverless instances share no memory
+  and an in-memory counter resets on every cold start. Per-client *and* global
+  limits: the first stops guessing at one password, the second stops a spray
+  where no single address trips it. Client addresses come only from
+  platform-set forwarding metadata — a browser-settable `X-Forwarded-For` would
+  let an attacker pick a new identity per attempt. Fails closed if the store is
+  unreadable.
+
+Lockout recovery is the 15-minute window expiring on its own; for an emergency,
+changing `ADMIN_PASSWORD_HASH` sets a new password *and* kills every session. No
+bypass secret — it would be a second credential of equal power that never gets
+rotated.
+
+*Bug worth remembering:* revision ids were originally timestamp-led, so two
+saves in the same millisecond sorted by their random suffix. Debounced autosave
+does exactly that. Ids are now version-led, which cannot tie.
+
 ### Next
 
 The `api/` routes, auth, uploads,
