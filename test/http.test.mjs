@@ -287,12 +287,35 @@ test("a stale save returns 409 with the current draft, not just a rejection", as
   assert.ok(stale.json().etag, "no ETag to retry with");
 });
 
-test("HEAD is accepted wherever GET is, without each route listing it", async () => {
-  const { sessions } = harness();
+test("HEAD is accepted wherever GET is, and never reaches a mutating branch", async () => {
+  const { sessions, drafts } = harness();
   const { cookie } = await authed(sessions);
+
   const res = fakeRes();
   await draftsIndex(fakeReq({ method: "HEAD", headers: { cookie } }), res);
   assert.equal(res.statusCode, 200);
+
+  // Handlers dispatch on req.method and fall through to their mutating branch
+  // for anything unrecognised, so an un-normalized HEAD would create a draft.
+  assert.deepEqual(await drafts.list(), [], "HEAD created a draft");
+});
+
+test("HEAD on a draft route does not fall through to save", async () => {
+  const { sessions, drafts } = harness();
+  const { cookie, csrf } = await authed(sessions);
+  const created = fakeRes();
+  await draftsIndex(fakeReq({
+    method: "POST", headers: { cookie, "x-csrf-token": csrf }, body: { body: "original" },
+  }), created);
+  const { draft } = created.json();
+
+  const res = fakeRes();
+  await draftById(fakeReq({ method: "HEAD", headers: { cookie }, query: { id: draft.postId } }), res);
+  assert.equal(res.statusCode, 200);
+
+  const after = await drafts.get(draft.postId);
+  assert.equal(after.draft.version, 1, "HEAD bumped the draft version");
+  assert.equal(after.draft.body, "original");
 });
 
 test("an unknown method is refused with an Allow header", async () => {
