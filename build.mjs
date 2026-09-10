@@ -4,9 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
-import { md, hasMath, readingTime, readingTimeFromText, toPlainText } from "./lib/markdown.mjs";
-import { renderLatex, stripHtml } from "./lib/latex.mjs";
-import { postPage, listPage, tagPage, notFoundPage, tagSlug, slugify } from "./lib/templates.mjs";
+import { collectPosts, groupByTag, loadPost, ContentError } from "./lib/content.mjs";
+import { postPage, listPage, tagPage, notFoundPage, tagSlug } from "./lib/templates.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -30,80 +29,28 @@ function copyInto(srcDir, destRel) {
   fs.cpSync(srcDir, path.join(DIST, destRel), { recursive: true });
 }
 
-function slugFromFilename(file, fmSlug) {
-  if (fmSlug) return fmSlug;
-  const base = path
-    .basename(file, path.extname(file))
-    .replace(/^\d{4}-\d{2}-\d{2}-/, ""); // drop leading date prefix
-  return slugify(base);
-}
-
+// Read post sources from disk and hand them to the shared content pipeline.
+// This is the only part of the generator that knows about files at all; the R2
+// reader will sit beside it and produce the same post objects (CLAUDE.md §1.1).
 function loadPosts() {
   if (!fs.existsSync(POSTS_DIR)) return [];
   const files = fs
     .readdirSync(POSTS_DIR)
-    .filter((f) => f.endsWith(".md") || f.endsWith(".tex"));
+    .filter((f) => f.endsWith(".md") || f.endsWith(".tex"))
+    .sort(); // stable input order; ties are broken deterministically downstream
   const posts = [];
 
   for (const file of files) {
     const raw = fs.readFileSync(path.join(POSTS_DIR, file), "utf8");
-    // gray-matter strips the same `---` YAML block from .md and .tex alike.
-    const { data, content } = matter(raw);
-
-    if (data.draft === true) {
+    const post = loadPost(raw, { sourceName: file });
+    if (!post) {
       console.log(`  - skipped (draft): ${file}`);
       continue;
     }
-    if (!data.title || !data.date) {
-      throw new Error(`Post "${file}" is missing required frontmatter: title and date.`);
-    }
-
-    // Markdown vs LaTeX: both produce HTML for the same .prose container.
-    const isTex = path.extname(file) === ".tex";
-    const html = isTex ? renderLatex(content) : md.render(content);
-    const math = data.math === true || (data.math !== false && hasMath(html));
-    const description =
-      data.description ||
-      (isTex ? stripHtml(html) : toPlainText(content)).slice(0, 160);
-
-    posts.push({
-      sourceFile: file,
-      slug: slugFromFilename(file, data.slug),
-      title: data.title,
-      date: new Date(data.date).toISOString(),
-      description,
-      tags: Array.isArray(data.tags) ? data.tags : [],
-      math,
-      readingTime: isTex ? readingTimeFromText(stripHtml(html)) : readingTime(content),
-      // Per-post embed hooks (see lib/templates.mjs postAssets).
-      styles: Array.isArray(data.styles) ? data.styles : [],
-      scripts: Array.isArray(data.scripts) ? data.scripts : [],
-      head: typeof data.head === "string" ? data.head : "",
-      distill: data.distill === true,
-      html,
-    });
+    posts.push(post);
   }
 
-  // Two files whose names reduce to the same slug would overwrite one another in
-  // dist/ without a word. Fail loudly instead: the author has to pick a slug.
-  const bySlug = new Map();
-  for (const post of posts) {
-    if (bySlug.has(post.slug)) {
-      throw new Error(
-        `Duplicate slug "${post.slug}": both "${bySlug.get(post.slug)}" and "${post.sourceFile}" ` +
-        `resolve to /${post.slug}/. Set a distinct \`slug:\` in the frontmatter of one of them.`
-      );
-    }
-    bySlug.set(post.slug, post.sourceFile);
-  }
-
-  // Newest first. Equal dates fall back to the slug so ordering never depends on
-  // the order the filesystem happens to hand back from readdir.
-  posts.sort((a, b) => {
-    const byDate = new Date(b.date) - new Date(a.date);
-    return byDate !== 0 ? byDate : a.slug.localeCompare(b.slug);
-  });
-  return posts;
+  return collectPosts(posts);
 }
 
 function build() {
@@ -120,14 +67,7 @@ function build() {
 
   // Per-tag pages -> /tags/<slug>/index.html. Posts are already newest-first,
   // so each tag's list inherits that order.
-  const tagMap = new Map(); // slug -> { tag, posts: [] }
-  for (const post of posts) {
-    for (const tag of post.tags) {
-      const slug = tagSlug(tag);
-      if (!tagMap.has(slug)) tagMap.set(slug, { tag, posts: [] });
-      tagMap.get(slug).posts.push(post);
-    }
-  }
+  const tagMap = groupByTag(posts, tagSlug);
   const tagPaths = [];
   for (const [slug, { tag, posts: tagged }] of tagMap) {
     write(path.join("tags", slug, "index.html"), tagPage(tag, tagged));
@@ -167,4 +107,12 @@ function build() {
   console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, DIST)}/`);
 }
 
-build();
+try {
+  build();
+} catch (err) {
+  if (err instanceof ContentError) {
+    console.error(`\nContent error: ${err.message}\n`);
+    process.exit(1);
+  }
+  throw err;
+}
