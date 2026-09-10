@@ -197,6 +197,31 @@ test("tripwire: elements toggled with el.hidden actually hide", () => {
   }
 });
 
+test("tripwire: dynamic api routes survive the trailing slash", () => {
+  // vercel.json sets trailingSlash, so every request arrives as /a/b/. A bare
+  // api/x/[id].js does not match a path ending in a slash and Vercel returns
+  // its own 404 — which is how the draft item route silently never worked.
+  // Nested as [id]/index.js it matches, mirroring dist/<slug>/index.html.
+  const vercel = JSON.parse(fs.readFileSync(path.join(ROOT, "vercel.json"), "utf8"));
+  if (!vercel.trailingSlash) return; // rule only applies while that is on
+
+  const offenders = [];
+  (function walk(dir, rel = "") {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const next = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(next, `${rel}/${entry.name}`);
+      else if (/^\[.+\]\.(js|mjs)$/.test(entry.name)) offenders.push(`api${rel}/${entry.name}`);
+    }
+  })(path.join(ROOT, "api"));
+
+  assert.deepEqual(
+    offenders, [],
+    `these dynamic routes are leaf files and will 404 under trailingSlash; ` +
+    `move each to <param>/index.js:\n  ${offenders.join("\n  ")}`
+  );
+});
+
 test("tripwire: the post listing exposes a well-formed table to assistive tech", () => {
   const dist = buildFixtures();
   try {
