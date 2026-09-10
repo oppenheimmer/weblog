@@ -7,16 +7,15 @@ clickable tag pages, an RSS feed, and a sitemap. Visually it mirrors the main
 site [souravmishra.net](https://souravmishra.net) but is a standalone repo and
 Vercel project.
 
-- **Input:** `content/posts/*.md` and `content/posts/*.tex`
+- **Input:** published posts in Cloudflare R2 (the repo holds none)
 - **Output:** static `dist/` (pretty URLs, no runtime framework)
-- **Publish:** commit + push → Vercel rebuilds automatically
+- **Publish:** write in `/editor/` → Publish → R2 → deploy hook → live
 
-> **In transition.** This repo is being converted into a browser-authored blog:
-> a password-protected `/editor` writes posts and media to Cloudflare R2, and
-> the build reads from there. The end state is *engine in git, data in R2* — a
-> clone will contain no posts and no media. See **Progress** below for what has
-> landed. The filesystem authoring described here still works and is what the
-> site currently builds from.
+> **Engine in git, data in R2.** This repository contains no posts and no
+> media — cloning it gives you the framework and nothing to read. Posts are
+> written in the browser at `/editor/` and live in Cloudflare R2; the build
+> reads them from there. A build with no R2 credentials produces an empty site
+> rather than failing, which is what a cloned engine should do.
 
 See [INSTALL.md](INSTALL.md) for first-time setup, deployment, and troubleshooting.
 
@@ -24,11 +23,18 @@ See [INSTALL.md](INSTALL.md) for first-time setup, deployment, and troubleshooti
 
 ## Write a post
 
-1. Drop a file in `content/posts/`, named `YYYY-MM-DD-some-slug.md` (or `.tex`).
-   The date prefix is stripped to form the URL slug `/some-slug/`. (Override the
-   slug with `slug:` in frontmatter if you want.)
-2. Add frontmatter (a `---` YAML block at the very top — required for **both**
-   `.md` and `.tex`):
+Sign in at **`/login/`** and write at **`/editor/`**. Set a title, date, tags and
+body, Save, then Publish. Publishing freezes the revision into R2 and triggers a
+rebuild; the post appears at `/<slug>/` a minute or so later.
+
+There is no repository step and no terminal step. `content/posts/` no longer
+exists — the repo is the engine, R2 holds the data.
+
+The frontmatter fields below describe what the editor stores per post and what a
+`.tex` or `.md` body may contain; they are no longer written by hand.
+
+<details>
+<summary>Frontmatter reference</summary>
 
    ```yaml
    ---
@@ -42,12 +48,10 @@ See [INSTALL.md](INSTALL.md) for first-time setup, deployment, and troubleshooti
    ---
    ```
 
-3. Write the body below the frontmatter (Markdown or LaTeX — see below).
-4. Commit and push. Vercel rebuilds and publishes automatically.
+</details>
 
-That's the whole loop — **no code changes per post.** Only `title` and `date`
-are mandatory; missing either aborts the build with a clear error. `draft: true`
-posts are skipped (and logged) so you can stage work-in-progress.
+Only `title` and `date` are mandatory; publishing refuses without them, and
+without a body. Drafts live in R2 and are never built.
 
 ### Markdown body
 
@@ -182,7 +186,8 @@ node --env-file=.env scripts/verify-store.mjs # storage layer vs. real R2
 | `lib/server/r2.mjs`           | R2 object store: JSON records, conditional writes, presigned URLs   |
 | `test/`                       | Golden output, contract invariants, tripwires, storage semantics    |
 | `scripts/`                    | Manual R2 probes (need credentials, not part of `npm test`)         |
-| `content/posts/`              | `.md` / `.tex` source — moving to R2                                |
+| `lib/server/publish.mjs`      | Freeze a revision to R2, update the slug index, fire the deploy hook |
+| `lib/server/published.mjs`    | Build-side reader: R2 revisions → rendered posts                    |
 
 The build is a single pass: parse frontmatter (`gray-matter`), render the body,
 detect math to gate the KaTeX stylesheet per page, sort newest-first, then emit:

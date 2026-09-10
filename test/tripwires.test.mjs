@@ -222,6 +222,34 @@ test("tripwire: dynamic api routes survive the trailing slash", () => {
   );
 });
 
+test("tripwire: the repository is an engine and holds no content", () => {
+  // CLAUDE.md §1.1: cloning gives the framework and nothing to read. Content
+  // and media live in R2. test/ is fixtures, assets/ is design, not data.
+  const offenders = [];
+  const skip = new Set(["node_modules", ".git", "dist", "test", ".vercel"]);
+
+  (function walk(dir, rel = "") {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue;
+      const next = path.join(dir, entry.name);
+      const relPath = `${rel}/${entry.name}`.replace(/^\//, "");
+      if (entry.isDirectory()) { walk(next, relPath); continue; }
+      // A post is a .md/.tex file carrying frontmatter. README and CLAUDE are
+      // documentation and have none.
+      if (/\.(md|tex)$/.test(entry.name)) {
+        const head = fs.readFileSync(next, "utf8").slice(0, 4);
+        if (head.startsWith("---")) offenders.push(`${relPath} (post)`);
+      }
+      if (/\.(png|jpe?g|gif|webp|avif)$/i.test(entry.name)) offenders.push(`${relPath} (media)`);
+    }
+  })(ROOT);
+
+  assert.deepEqual(
+    offenders, [],
+    `content found in the engine; it belongs in R2 (§1.1):\n  ${offenders.join("\n  ")}`
+  );
+});
+
 test("tripwire: the post listing exposes a well-formed table to assistive tech", () => {
   const dist = buildFixtures();
   try {
