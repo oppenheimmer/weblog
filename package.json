@@ -8,11 +8,11 @@
     "build": "node build.mjs",
     "clean": "node -e \"import('node:fs').then(fs=>fs.rmSync('dist',{recursive:true,force:true}))\"",
     "dev": "node build.mjs && npx --yes serve dist -l 4321",
-    "test": "node --test test/",
+    "test": "node --test \"test/**/*.test.mjs\"",
     "test:bless": "node test/helpers/bless.mjs"
   },
   "engines": {
-    "node": ">=26"
+    "node": "24.x"
   },
   "dependencies": {
     "@unified-latex/unified-latex-to-hast": "^1.8.4",
