@@ -11,6 +11,7 @@ const els = {
     body: $("body"), save: $("save"), newPost: $("new-post"), logout: $("logout"),
     discard: $("discard"), exportBtn: $("export"), error: $("editor-error"),
     conflict: $("conflict"), conflictKeep: $("conflict-keep"), conflictTheirs: $("conflict-theirs"),
+    conflictDetail: $("conflict-detail"), conflictNote: $("conflict-note"),
 };
 
 const state = {
@@ -20,6 +21,7 @@ const state = {
     // What was last persisted, so "unsaved" is a real comparison rather than a
     // flag that drifts out of sync with the fields.
     saved: null,
+    version: null,
     conflict: null,
     saving: false,
 };
@@ -147,6 +149,7 @@ async function openDraft(postId) {
     const { data } = await api(`/api/drafts/${postId}/`);
     state.postId = data.draft.postId;
     state.etag = data.etag;
+    state.version = data.draft.version;
     writeForm(data.draft);
     state.saved = readForm();
     setStatus(`saved · v${data.draft.version}`);
@@ -158,11 +161,32 @@ async function newPost() {
     if (isDirty() && !confirm("This draft has unsaved changes. Discard them?")) return;
     state.postId = null;
     state.etag = null;
+    state.version = null;
     writeForm({ date: new Date().toISOString().slice(0, 10) });
     state.saved = readForm();
     setStatus("not saved");
     setError("");
     await refreshList();
+}
+
+/** Spell out both sides concretely, without ranking them by age. */
+function describeConflict(current) {
+    const theirVersion = current?.version;
+    const when = current?.updatedAt ? new Date(current.updatedAt).toLocaleTimeString() : null;
+
+    els.conflictDetail.textContent = [
+        state.version ? `This tab has been editing version ${state.version}.` : "",
+        theirVersion
+            ? `Another tab or window saved version ${theirVersion}${when ? ` at ${when}` : ""}.`
+            : "Another tab or window saved since this one loaded.",
+        "Nothing has been overwritten yet.",
+    ].filter(Boolean).join(" ");
+
+    const theirs = theirVersion ? `version ${theirVersion}` : "the saved version";
+    els.conflictNote.textContent =
+        `"Save mine over it" replaces ${theirs} with the text on this screen. ` +
+        `"Discard mine, load saved" replaces what is on this screen with ${theirs} — ` +
+        `use Export first if you might want it back.`;
 }
 
 async function save({ force = false } = {}) {
@@ -179,6 +203,7 @@ async function save({ force = false } = {}) {
             const { data } = await api("/api/drafts/", { method: "POST", body: fields });
             state.postId = data.draft.postId;
             state.etag = data.etag;
+            state.version = data.draft.version;
             state.saved = fields;
             setStatus(`saved · v${data.draft.version}`);
             await refreshList();
@@ -190,8 +215,11 @@ async function save({ force = false } = {}) {
         });
 
         if (res.status === 409) {
-            // Never resolve this silently: both versions are real work.
+            // Never resolve this silently: both versions are real work, and
+            // which one is "newer" is genuinely ambiguous — unsaved text on this
+            // screen may have been typed after the other tab hit save.
             state.conflict = { etag: data.etag, draft: data.current };
+            describeConflict(data.current);
             els.conflict.hidden = false;
             els.conflictKeep.focus();
             setStatus("conflict", "error");
@@ -199,6 +227,7 @@ async function save({ force = false } = {}) {
         }
 
         state.etag = data.etag;
+        state.version = data.draft.version;
         state.saved = fields;
         state.conflict = null;
         setStatus(`saved · v${data.draft.version}`);
@@ -264,11 +293,13 @@ els.conflictKeep.addEventListener("click", guard(async () => {
 els.conflictTheirs.addEventListener("click", guard(async () => {
     els.conflict.hidden = true;
     if (state.conflict?.draft) {
-        writeForm(state.conflict.draft);
+        const loaded = state.conflict.draft;
+        writeForm(loaded);
         state.etag = state.conflict.etag;
+        state.version = loaded.version ?? null;
         state.saved = readForm();
         state.conflict = null;
-        setStatus("loaded newer version");
+        setStatus(loaded.version ? `saved · v${loaded.version}` : "loaded saved version");
     }
 }));
 
