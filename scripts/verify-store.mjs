@@ -7,6 +7,7 @@
 // script checks that. Run it whenever the storage layer or the double changes.
 import crypto from "node:crypto";
 import { createStore, ConflictError } from "../lib/server/r2.mjs";
+import { createDraftStore } from "../lib/server/drafts.mjs";
 import { loadR2Config } from "../lib/server/config.mjs";
 
 const config = { ...loadR2Config(), prefix: `probe-store-${crypto.randomBytes(4).toString("hex")}` };
@@ -110,6 +111,54 @@ await check("presigned PUT then read back through the store", async () => {
   assert(res.ok, `presigned PUT failed: HTTP ${res.status}`);
   const stored = await store.get("signed.bin");
   assert(Buffer.from(stored.body).equals(payload), "bytes differ after presigned upload");
+});
+
+// ---- drafts over real R2 ---------------------------------------------------
+const drafts = createDraftStore(store);
+
+await check("draft create/read/save round-trips", async () => {
+  const created = await drafts.create({ title: "Real", body: "v1", tags: ["probe"] });
+  const read = await drafts.get(created.draft.postId);
+  assert(read.draft.body === "v1", "body did not round-trip");
+  const saved = await drafts.save(created.draft.postId, { body: "v2" }, read.etag);
+  assert(saved.draft.version === 2, `expected version 2, got ${saved.draft.version}`);
+  assert(saved.draft.title === "Real", "an untouched field was lost on save");
+});
+
+await check("two tabs conflict, and the loser leaves only an orphan revision", async () => {
+  const created = await drafts.create({ title: "Race", body: "original" });
+  const postId = created.draft.postId;
+  const tabA = await drafts.get(postId);
+  const tabB = await drafts.get(postId);
+
+  await drafts.save(postId, { body: "from A" }, tabA.etag);
+
+  let conflicted = false;
+  try {
+    await drafts.save(postId, { body: "from B" }, tabB.etag);
+  } catch (err) {
+    conflicted = err instanceof ConflictError;
+  }
+  assert(conflicted, "tab B overwrote tab A instead of conflicting");
+
+  const current = await drafts.get(postId);
+  assert(current.draft.body === "from A", `pointer names the wrong revision: ${current.draft.body}`);
+
+  const revisions = await drafts.revisions(postId);
+  assert(revisions.length === 3, `expected 3 revisions (v1, A, orphaned B), got ${revisions.length}`);
+  assert(revisions.includes(current.draft.revisionId), "current revision missing from history");
+});
+
+await check("revisions list in chronological order", async () => {
+  const created = await drafts.create({ title: "Hist", body: "v1" });
+  let etag = created.etag;
+  for (const body of ["v2", "v3"]) {
+    ({ etag } = await drafts.save(created.draft.postId, { body }, etag));
+  }
+  const ids = await drafts.revisions(created.draft.postId);
+  const bodies = [];
+  for (const id of ids) bodies.push((await drafts.getRevision(created.draft.postId, id)).body);
+  assert(bodies.join(",") === "v1,v2,v3", `out of order: ${bodies.join(",")}`);
 });
 
 // ---- cleanup ---------------------------------------------------------------

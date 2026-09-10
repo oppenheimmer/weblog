@@ -1,15 +1,22 @@
 # Sourav Mishra — Blog
 
-A tiny, dependency-light static site generator for the blog at
-`blog.souravmishra.net`. You write **Markdown or LaTeX**; a ~150-line Node build
-emits static HTML with **build-time KaTeX math** (no client-side math JS),
-syntax-highlighted code, clickable tag pages, an RSS feed, and a sitemap.
-Visually it mirrors the main site [souravmishra.net](https://souravmishra.net)
-but is a fully standalone repo and Vercel project.
+A dependency-light static site generator for the blog at
+`blog.souravmishra.net`. Markdown or LaTeX in, static HTML out, with
+**build-time KaTeX math** (no client-side math JS), syntax-highlighted code,
+clickable tag pages, an RSS feed, and a sitemap. Visually it mirrors the main
+site [souravmishra.net](https://souravmishra.net) but is a standalone repo and
+Vercel project.
 
 - **Input:** `content/posts/*.md` and `content/posts/*.tex`
 - **Output:** static `dist/` (pretty URLs, no runtime framework)
 - **Publish:** commit + push → Vercel rebuilds automatically
+
+> **In transition.** This repo is being converted into a browser-authored blog:
+> a password-protected `/editor` writes posts and media to Cloudflare R2, and
+> the build reads from there. The end state is *engine in git, data in R2* — a
+> clone will contain no posts and no media. See **Progress** below for what has
+> landed. The filesystem authoring described here still works and is what the
+> site currently builds from.
 
 See [INSTALL.md](INSTALL.md) for first-time setup, deployment, and troubleshooting.
 
@@ -139,8 +146,20 @@ npm run dev        # build + serve dist at http://localhost:4321
 npm run clean      # remove ./dist
 ```
 
-Requires **Node ≥ 18**. `dist/` is gitignored — it is regenerated on every build
-and on every Vercel deploy.
+```bash
+npm test           # 56 tests, no credentials needed
+npm run test:bless # re-record golden output after an intended change
+```
+
+Requires **Node 24.x** (`.nvmrc`, `engines`). Vercel rejects anything newer.
+`dist/` is gitignored — regenerated on every build and every Vercel deploy.
+
+Scripts that touch the live R2 bucket need credentials and are run by hand:
+
+```bash
+node --env-file=.env scripts/probe-r2.mjs     # R2 capability probe
+node --env-file=.env scripts/verify-store.mjs # storage layer vs. real R2
+```
 
 ---
 
@@ -158,7 +177,12 @@ and on every Vercel deploy.
 | `assets/images/`              | Global media → served at `/images/…`                                |
 | `assets/posts/<slug>/`        | Optional per-post JS/CSS embeds → `/assets/posts/<slug>/…`          |
 | `assets/vendor/`              | Self-hosted third-party libs (distill `template.v2.js`)             |
-| `content/posts/`              | Your `.md` / `.tex` source — the only thing you touch to publish    |
+| `lib/content.mjs`             | Source text → validated, rendered post. No filesystem access        |
+| `lib/server/config.mjs`       | R2 settings, validated; never logs a credential value               |
+| `lib/server/r2.mjs`           | R2 object store: JSON records, conditional writes, presigned URLs   |
+| `test/`                       | Golden output, contract invariants, tripwires, storage semantics    |
+| `scripts/`                    | Manual R2 probes (need credentials, not part of `npm test`)         |
+| `content/posts/`              | `.md` / `.tex` source — moving to R2                                |
 
 The build is a single pass: parse frontmatter (`gray-matter`), render the body,
 detect math to gate the KaTeX stylesheet per page, sort newest-first, then emit:
@@ -177,19 +201,125 @@ dist/
 
 ## Deploy (Vercel)
 
-One repo ↔ one Vercel project:
+One repo ↔ one Vercel project (`weblog`), which will also serve `/editor` and
+`/api/*` as functions.
 
-- **Build Command:** `npm run build`
-- **Output Directory:** `dist`
-- **Install Command:** `npm install`
+Build command and output directory are declared in `vercel.json`, so a freshly
+created project needs no dashboard configuration. Node is pinned to `24.x` in
+`engines` and `.nvmrc`.
 
-Push to the repo → Vercel rebuilds and deploys. `vercel.json` supplies clean URLs,
-trailing slashes, and immutable caching for fonts and KaTeX CSS. Assign the
+Push to the repo → Vercel rebuilds and deploys. `vercel.json` also supplies clean
+URLs, trailing slashes, and immutable caching for fonts and KaTeX CSS. Assign the
 domain `blog.souravmishra.net` when ready (DNS `CNAME` → Vercel). If the origin
 changes, update `SITE.url` in [lib/templates.mjs](lib/templates.mjs) — it drives
 canonical URLs, Open Graph tags, the feed, and the sitemap.
 
+Environment variables live in Vercel project settings and, locally, in a
+gitignored `.env`. Nothing env-shaped is committed.
+
 Full step-by-step setup, DNS, and troubleshooting live in [INSTALL.md](INSTALL.md).
+
+---
+
+## Progress
+
+Where the browser-authoring conversion has got to, and the decisions worth
+remembering. Full plan and rationale live in `CLAUDE.md` (not committed).
+
+### Done — test harness and regression net
+
+Built *before* touching the renderer, so the refactor could be verified rather
+than hoped at.
+
+- **Golden output.** An 8-post fixture corpus under `test/fixtures/`, a manifest
+  hashing every emitted file, and 7 full pages kept as text. A failing hash names
+  the page that moved; the stored pages show how. `npm run test:bless` re-records
+  deliberately — a diff under `test/golden/` means public output changed.
+- **Contract invariants.** Post and tag URLs, canonical matching emitted path,
+  feed and sitemap completeness, KaTeX gating, draft exclusion.
+- **Determinism.** Two builds of the same input must produce identical output.
+
+*Note:* `build.mjs` takes `BLOG_POSTS_DIR` / `BLOG_ASSETS_DIR` / `BLOG_DIST_DIR`
+overrides so tests build fixtures without touching real content. Adding them was
+verified byte-identical against the previous output before anything else moved.
+
+### Done — five live defects fixed
+
+Each found by reading the source, each with a named tripwire test written to fail
+first. All were shipping:
+
+| Defect | Fix |
+| --- | --- |
+| JSON-LD broke out of its `<script>` on any title containing `</script>` — the payload truncated mid-string | `jsonLdScript()` escapes `<`, `>`, `&`, U+2028/9 |
+| Two posts whose filenames reduced to the same slug silently overwrote each other in `dist/` | Duplicate slugs abort the build, naming both sources |
+| Post order for equal dates depended on `readdir` order | Deterministic tie-break on slug |
+| Dates rendered a day early anywhere west of UTC | `formatDate` pinned to UTC |
+| `prefers-reduced-motion` disabled the animation that revealed content — those visitors got a blank page, as did anyone with JS off | Content visible by default; hidden only under `no-preference` **and** a `.js` root class |
+
+The timezone bug is the argument for the whole harness: this machine is
+UTC+9, so golden output never showed it. Only the multi-timezone tripwire caught it.
+
+### Done — content pipeline extracted
+
+`lib/content.mjs` turns source text into a validated, rendered post **with no
+filesystem access**. That decoupling is the point: the build feeds it files, and
+the R2 reader and editor preview will feed it strings, through one pipeline
+rather than three that drift. `build.mjs` dropped to ~118 lines and is now the
+only module that touches files.
+
+Added validation: reserved slugs (a post can no longer shadow `/tags/`, `/api/`,
+`/editor/`, `/404/`), unparseable dates, empty slugs, unknown formats — all
+reported as author-facing `ContentError`s rather than stack traces.
+
+### Done — R2 storage layer
+
+`scripts/probe-r2.mjs` ran first, as a hard gate: "S3-compatible" does not
+guarantee any given S3 feature works, and the whole draft/session/job design
+rests on conditional writes. **16/16 passed** against `weblog-data` —
+`If-None-Match: *` and `If-Match` both honoured, both rejecting with 412 rather
+than silently overwriting; five concurrent racers on one key produced exactly one
+winner; read-after-write consistent; pagination, server-side copy and presigned
+PUT/GET all work; bucket confirmed private.
+
+On that basis `lib/server/r2.mjs` provides prefix-scoped objects, JSON records
+with `createJson` / `updateJson` / `mutateJson`, paginated listing, presigned
+URLs, and bounded retries.
+
+Two notes worth keeping:
+
+- **Retries exclude 412 on purpose.** A precondition failure is a real answer,
+  not a blip; retrying it would defeat the concurrency control it implements.
+  A test asserts the conflicting write is attempted exactly once.
+- **Test it two ways.** Unit tests run against an in-memory double so `npm test`
+  needs no credentials, but a double is only trustworthy while it matches
+  reality. `scripts/verify-store.mjs` runs the same module against the live
+  bucket, and it caught `list("")` throwing on real R2 while the double was
+  green. Run it whenever the storage layer or the double changes.
+
+### Done — drafts with immutable revisions
+
+`lib/server/drafts.mjs`. Every save writes a **new** revision object and then
+moves a single pointer to it, conditionally. Nothing is ever overwritten, so
+revision history is a side effect rather than a feature to build.
+
+The ordering matters: revision first, pointer second. If the pointer update
+loses a race, the new revision is orphaned — harmless and collectable — while
+the previous draft stays intact. Losing the race must never lose work. There are
+tests for this against both the double and the real bucket.
+
+Drafts validate *loosely on absence, strictly on shape*: a half-written post with
+no title must still save, but a 10 MB title or a malformed date is refused. That
+caught a real bug — `2026-02-30` passes an ISO regex, and `Date` silently rolls
+it over to March 2. Validation now round-trips the parsed date and compares.
+
+Revision ids are time-prefixed base36, so they sort chronologically as plain
+strings and history needs a listing rather than a read of every object.
+
+### Next
+
+The `api/` routes, auth, uploads,
+the editor UI, and finally publication + the migration that empties
+`content/posts/` and `assets/images/` into R2.
 
 ---
 
