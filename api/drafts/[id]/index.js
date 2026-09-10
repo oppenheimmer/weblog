@@ -1,9 +1,14 @@
 // GET    /api/drafts/<id>/ — fetch a draft and its ETag
+//
+// Nested as [id]/index.js rather than [id].js on purpose: vercel.json sets
+// trailingSlash, so requests arrive as /api/drafts/<id>/ and a bare [id].js
+// does not match that — it 404s. This mirrors how the static site emits
+// <slug>/index.html, where the trailing slash is the natural form.
 // PUT    /api/drafts/<id>/ — save conditionally; 409 when stale
 // DELETE /api/drafts/<id>/ — discard a draft and its revisions
-import { createDraftStore } from "../../lib/server/drafts.mjs";
-import { ConflictError } from "../../lib/server/r2.mjs";
-import { route, readJsonBody, sendJson, sendError } from "../../lib/server/http.mjs";
+import { createDraftStore } from "../../../lib/server/drafts.mjs";
+import { ConflictError } from "../../../lib/server/r2.mjs";
+import { route, readJsonBody, sendJson, sendError } from "../../../lib/server/http.mjs";
 
 export default route(async ({ req, res, requestId, store }) => {
   const drafts = createDraftStore(store);

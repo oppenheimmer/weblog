@@ -28,6 +28,23 @@ const FIELDS = ["title", "date", "format", "slug", "description", "tags", "body"
 
 // ---------------------------------------------------------------- helpers
 
+/**
+ * Wrap an event handler so a failure is shown rather than lost.
+ *
+ * A rejected promise inside a listener has nowhere to go: the browser reports
+ * an unhandled rejection to the console and the user sees nothing happen. That
+ * is exactly how a broken Discard looked like a dead button.
+ */
+const guard = (fn) => async (...args) => {
+    try {
+        await fn(...args);
+    } catch (err) {
+        if (err.message === "unauthenticated") return; // already reported
+        setStatus("failed", "error");
+        setError(err.message || "Something went wrong.");
+    }
+};
+
 const setStatus = (text, kind = "") => {
     els.saveState.textContent = text;
     els.saveState.dataset.state = kind;
@@ -119,7 +136,7 @@ async function refreshList() {
         meta.textContent = `v${draft.version} · ${new Date(draft.updatedAt).toLocaleString()}`;
 
         button.append(title, meta);
-        button.addEventListener("click", () => openDraft(draft.postId));
+        button.addEventListener("click", guard(() => openDraft(draft.postId)));
         li.append(button);
         els.draftList.append(li);
     }
@@ -201,15 +218,15 @@ async function save({ force = false } = {}) {
 
 // ---------------------------------------------------------------- events
 
-els.save.addEventListener("click", () => save());
-els.newPost.addEventListener("click", newPost);
+els.save.addEventListener("click", guard(() => save()));
+els.newPost.addEventListener("click", guard(newPost));
 
-els.discard.addEventListener("click", async () => {
+els.discard.addEventListener("click", guard(async () => {
     if (!state.postId) return newPost();
     if (!confirm("Delete this draft and all its revisions? This cannot be undone.")) return;
     await api(`/api/drafts/${state.postId}/`, { method: "DELETE" });
     await newPost();
-});
+}));
 
 // A local escape hatch that never depends on the network or the session.
 els.exportBtn.addEventListener("click", () => {
@@ -233,18 +250,18 @@ els.exportBtn.addEventListener("click", () => {
     URL.revokeObjectURL(url);
 });
 
-els.logout.addEventListener("click", async () => {
+els.logout.addEventListener("click", guard(async () => {
     if (isDirty() && !confirm("This draft has unsaved changes. Sign out anyway?")) return;
     try { await api("/api/auth/logout/", { method: "POST" }); } catch { /* leaving regardless */ }
     window.location.href = "/login/";
-});
+}));
 
-els.conflictKeep.addEventListener("click", async () => {
+els.conflictKeep.addEventListener("click", guard(async () => {
     els.conflict.hidden = true;
     await save({ force: true });
-});
+}));
 
-els.conflictTheirs.addEventListener("click", async () => {
+els.conflictTheirs.addEventListener("click", guard(async () => {
     els.conflict.hidden = true;
     if (state.conflict?.draft) {
         writeForm(state.conflict.draft);
@@ -253,7 +270,7 @@ els.conflictTheirs.addEventListener("click", async () => {
         state.conflict = null;
         setStatus("loaded newer version");
     }
-});
+}));
 
 for (const id of FIELDS) {
     els[id].addEventListener("input", () => {
@@ -277,6 +294,7 @@ window.addEventListener("beforeunload", (event) => {
 // ---------------------------------------------------------------- start
 
 (async function start() {
+  try {
     const res = await fetch("/api/auth/session/");
     const session = await res.json();
     if (!session.authenticated) {
@@ -285,4 +303,8 @@ window.addEventListener("beforeunload", (event) => {
     }
     state.csrf = session.csrfToken;
     await newPost();
+  } catch (err) {
+    setStatus("failed", "error");
+    setError(`Could not start the editor: ${err.message}`);
+  }
 })();

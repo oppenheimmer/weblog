@@ -53,7 +53,7 @@ const login = (await import("../api/auth/login.js")).default;
 const logout = (await import("../api/auth/logout.js")).default;
 const sessionRoute = (await import("../api/auth/session.js")).default;
 const draftsIndex = (await import("../api/drafts/index.js")).default;
-const draftById = (await import("../api/drafts/[id].js")).default;
+const draftById = (await import("../api/drafts/[id]/index.js")).default;
 
 // ---------------------------------------------------------------- origin
 
