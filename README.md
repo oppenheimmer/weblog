@@ -1,81 +1,72 @@
 # Sourav Mishra — Blog
 
-A dependency-light static site generator for the blog at
-`blog.souravmishra.net`. Markdown or LaTeX in, static HTML out, with
-**build-time KaTeX math** (no client-side math JS), syntax-highlighted code,
-clickable tag pages, an RSS feed, and a sitemap. Visually it mirrors the main
-site [souravmishra.net](https://souravmishra.net) but is a standalone repo and
-Vercel project.
+A dependency-light engine for the blog at `blog.souravmishra.net`. Posts are
+written in the browser, stored in Cloudflare R2, and built into static HTML
+with **build-time KaTeX math** (no client-side math JavaScript), highlighted
+code, tag pages, a full-article feed with a table view, RSS, and a sitemap.
+Visually it mirrors the main site [souravmishra.net](https://souravmishra.net),
+but it is a standalone repository and Vercel project.
 
-- **Input:** published posts in Cloudflare R2 (the repo holds none)
-- **Output:** static `dist/` (pretty URLs, no runtime framework)
-- **Publish:** write in `/editor/` → Publish → R2 → deploy hook → live
+- **Input:** published posts in Cloudflare R2; the repository holds none
+- **Output:** static `dist/` with pretty URLs and no runtime framework
+- **Publish:** write at `/editor/` → Publish → R2 → deploy hook → live
 
 > **Engine in git, data in R2.** This repository contains no posts and no
-> media — cloning it gives you the framework and nothing to read. Posts are
-> written in the browser at `/editor/` and live in Cloudflare R2; the build
-> reads them from there. A build with no R2 credentials produces an empty site
+> media, so cloning it gives you the framework and nothing to read. The build
+> reads posts from R2. A build with no R2 credentials produces an empty site
 > rather than failing, which is what a cloned engine should do.
 
-See [INSTALL.md](INSTALL.md) for first-time setup, deployment, and troubleshooting.
+See [INSTALL.md](INSTALL.md) for first-time setup, deployment, and
+troubleshooting.
 
 ---
 
 ## Write a post
 
-Sign in at **`/login/`** and write at **`/editor/`**. Set a title, date, tags and
-body, Save, then Publish. Publishing freezes the revision into R2 and triggers a
-rebuild; the post appears at `/<slug>/` a minute or so later.
+Sign in at **`/login/`** and write at **`/editor/`**. Fill in the fields, write
+the body, Save, then Publish. Publishing freezes the saved revision into R2 and
+triggers a rebuild; the post appears at `/<slug>/` a minute or so later. There
+is no repository step and no terminal step.
 
-There is no repository step and no terminal step. `content/posts/` no longer
-exists — the repo is the engine, R2 holds the data.
+| Field       | Required | Notes                                                    |
+| ----------- | -------- | -------------------------------------------------------- |
+| Title       | Yes      |                                                          |
+| Date        | Yes      | Drives ordering, display, and the feed                   |
+| Format      | Yes      | Markdown or LaTeX                                        |
+| Slug        | No       | Derived from the title when empty; some routes reserved  |
+| Description | No       | Meta tags, social cards, RSS; derived when empty         |
+| Tags        | No       | Comma-separated; each tag gets its own page              |
 
-The frontmatter fields below describe what the editor stores per post and what a
-`.tex` or `.md` body may contain; they are no longer written by hand.
+Publishing refuses a post without a title, a date, or a body. Drafts live in
+R2 and are never built.
 
-<details>
-<summary>Frontmatter reference</summary>
-
-   ```yaml
-   ---
-   title: "Post title"              # required
-   date: 2026-06-25                 # required — ISO date; drives ordering, display, feed
-   description: "1–2 line summary"  # optional — <meta>, social cards, RSS; auto-derived if omitted
-   tags: [machine-learning, vision] # optional — become clickable tag pages
-   draft: false                     # optional — true => excluded from the build
-   math: true                       # optional — auto-enabled when math is detected
-   slug: custom-slug                # optional — override the filename-derived slug
-   ---
-   ```
-
-</details>
-
-Only `title` and `date` are mandatory; publishing refuses without them, and
-without a body. Drafts live in R2 and are never built.
+**Preview** shows the post beside its source exactly as it will publish, in a
+sandboxed frame. It reports what publishing would refuse as errors, and what
+would not render as written, such as a broken formula or an unsupported LaTeX
+command, as warnings. Warnings never block publishing.
 
 ### Markdown body
 
-Standard Markdown via `markdown-it` (`html: true`, linkify, typographer):
+Markdown via `markdown-it`, with linkify and typographic quotes:
 
-- Math: `$inline$` and `$$display$$`, pre-rendered to HTML at build time by KaTeX.
-- Fenced code blocks (```` ```python ````) are highlighted at build time
-  (highlight.js).
-- Headings (`##`–`####`) get stable anchor ids with a clickable `#` permalink.
-- External `http(s)` links automatically get `target="_blank"` + `rel="noopener"`.
-- Raw HTML passes straight through (see *Interactive JS* below).
+- Math: `$inline$` and `$$display$$`, pre-rendered to HTML by KaTeX at build
+  time.
+- Fenced code blocks (```` ```python ````) are highlighted at build time with
+  highlight.js.
+- Headings (`##`–`####`) get stable anchor ids and a `#` permalink.
+- External `http(s)` links open in a new tab with `rel="noopener noreferrer"`.
+- **Raw HTML is shown as text, never rendered**, so a post cannot carry markup
+  or script. Links accept only `http`, `https`, `mailto`, and relative URLs.
+- Images must be attachments (see below). An image pointing at another site
+  renders as its alt text, so a post cannot make readers' browsers call a
+  third party.
 
-### LaTeX body (`.tex`)
+### LaTeX body
 
-Drop a `.tex` file instead of `.md` (same `YYYY-MM-DD-slug.tex` naming, same
-`---` YAML block at the top, then plain LaTeX):
+Choose **LaTeX** as the format and write the document body. No preamble or
+`\documentclass` is needed or processed:
 
 ```latex
----
-title: "A LaTeX-sourced note"
-date: 2026-06-26
-tags: [latex]
----
-
 \section{Heading}
 Body text with inline math $E = mc^2$ and display math:
 \[ \int_0^1 x\,dx = \tfrac12 \]
@@ -85,181 +76,233 @@ Body text with inline math $E = mc^2$ and display math:
 \end{itemize}
 ```
 
-`.tex` is converted in-process by [lib/latex.mjs](lib/latex.mjs) using the
-pure-JS `unified-latex` pipeline (**no `pandoc`, no external binary**); math is
-rendered with the same build-time KaTeX engine as Markdown. Everything
-downstream — slug, tags, description, reading time, RSS, sitemap, the index
-table — is identical to a Markdown post.
+LaTeX is converted in-process by [lib/latex.mjs](lib/latex.mjs) using the
+pure-JavaScript `unified-latex` pipeline (**no `pandoc`, no external binary**),
+and its math is rendered by the same build-time KaTeX as Markdown. Everything
+downstream — slug, tags, description, reading time, RSS, sitemap, listings — is
+identical to a Markdown post.
 
 > **LaTeX caveats.** `\section` maps to `<h3>` (a `unified-latex` default), and
 > `\caption{}` inside a `figure` becomes a generic span rather than a styled
-> `<figcaption>`. Content renders correctly; these are cosmetic. Use the
-> document body only — no preamble/`\documentclass` is needed or processed.
+> `<figcaption>`. Commands the renderer does not support, such as `\ref`,
+> `\cite`, or a `tikzpicture`, appear as preview warnings. A `\href` to an
+> unsafe URL renders as plain text.
 
 ### Tags
 
-Tags in frontmatter render as clickable chips. Each distinct tag gets its own
-page at `/tags/<slug>/` listing every post with that tag, newest-first
-(generated automatically and added to the sitemap). Chips appear on the index,
-post pages, and tag pages.
+Tags render as clickable chips on listings and post pages. Each distinct tag
+gets a page at `/tags/<slug>/` listing its posts newest-first, added to the
+sitemap automatically.
 
-### Images & media
+### Images and `.tex` snippets
 
-Put images in the single global folder **`assets/images/`** — no per-post
-subfolders needed. Reference them by the same absolute `/images/<file>` path from
-either format:
+Attach files in the editor with the attach button, by pasting, or by dropping
+them on the page. The editor inserts the reference for the post's format:
 
-- Markdown: `![alt text](/images/diagram.png)`
-- LaTeX: `\includegraphics{/images/diagram.png}` (include the extension —
-  `\includegraphics{plot}` emits `src="plot"` and won't load)
+| Attachment     | Markdown                    | LaTeX                                    |
+| -------------- | --------------------------- | ---------------------------------------- |
+| Image          | `![alt](attachment://<id>)` | `\includegraphics{attachments/<id>.png}` |
+| `.tex` snippet | `::tex[<id>]`               | `\input{attachments/<id>.tex}`           |
 
-Subfolders are allowed and preserved (`assets/images/2026/foo.png` →
-`/images/2026/foo.png`). Images are styled automatically by `.prose img`
-(centered, rounded, responsive) — no per-post CSS.
+Images may be PNG, JPEG, GIF, or WebP, up to 10 MiB each. Snippets are UTF-8
+`.tex` files up to 256 KiB. A post holds at most 25 attachments and 50 MiB.
+Files are identified by their bytes, never by their names, and go straight from
+the browser to R2.
 
-### Interactive JS / distill components
+Publishing turns each reference into a real path. A published image lives at
+`/images/uploads/<slug>/<name>` under a readable name, so pasting `image.png`
+twice gives `image.png` and `image-2.png`. Published pages carry each image's
+width and height, so the page does not jump as images load. Snippets render
+inline as part of the article.
 
-Per-post asset hooks (all optional frontmatter):
+### Feed and table
+
+The home page and every tag page show posts two ways, switched with the
+**Feed / Table** control:
+
+- **Feed**, the default and what a reader without JavaScript sees: complete
+  articles, newest first. Pages continue at `/page/2/` once one page's articles
+  would exceed about 350 KB of HTML, a budget set by measuring real posts.
+- **Table:** every post in the listing, one row each, with title, date, and
+  tags.
+
+The reader's choice is remembered in their browser, and `?view=feed` or
+`?view=table` overrides it for one visit.
+
+### Embed hooks for trusted posts
+
+Posts read from a local directory through `BLOG_POSTS_DIR` are treated as
+repository-authored and trusted. They may contain raw HTML and set per-post
+asset hooks:
 
 ```yaml
 styles:  ["/assets/posts/<slug>/fig.css"]   # <link> in <head>
 scripts: ["/assets/posts/<slug>/fig.js"]    # <script type="module" defer> at body end
-head:    "<raw head html>"                   # injected verbatim into <head> (escape hatch)
+head:    "<raw head html>"                   # injected verbatim into <head>
 distill: true                                # load distill <d-*> web components
 ```
 
-`markdown-it` allows raw HTML, so `<div>`, `<canvas>`, `<svg>`, and custom
-elements in the post body pass straight through. For per-post libraries, drop
-files under `assets/posts/<slug>/…` — the tree is copied to
-`dist/assets/posts/…` and served at `/assets/posts/<slug>/…`. Scripts load with
-`type="module" defer` after the site's own `/assets/blog.js`.
+The build copies a `posts/` folder from the assets directory
+(`BLOG_ASSETS_DIR`) to `/assets/posts/`, and `distill: true` loads the
+self-hosted `assets/vendor/distill.template.v2.js`. The test fixtures exercise
+every hook, with their assets in `test/fixtures/assets/posts/`.
 
-With `distill: true`, the **self-hosted** `template.v2.js` (vendored at
-`assets/vendor/`) is loaded so `<d-math>`, `<d-figure>`, `<d-footnote>`, etc.
-work in the body. Standalone components drop in cleanly; page-layout `<d-*>`
-components (byline, citation auto-numbering) are experimental.
-
-A post using any of these hooks, or raw `<script>`/`<style>`/`<link>` in its
-body, appears in the feed as its title and description with a link, not inline:
-its code assumes it owns the page, and two such posts side by side could load a
-bundle twice or bind each other's elements. It runs on its own page, once.
+Posts published from the editor can never set these hooks, and their raw HTML
+is escaped. In listings, a post that uses a hook appears as its title and
+description with a link rather than inline, because its code assumes it owns
+the page. It runs on its own page, once.
 
 ---
 
 ## Local development
 
 ```bash
-npm install        # one-time — installs build deps + KaTeX (CSS/fonts source)
-npm run build      # generates ./dist
-npm run dev        # build + serve dist at http://localhost:4321
+npm install        # one time: build dependencies and KaTeX (CSS and fonts)
+npm run build      # generate ./dist
+npm run dev        # build, then serve dist at http://localhost:4321
 npm run clean      # remove ./dist
-```
-
-```bash
-npm test           # 56 tests, no credentials needed
+npm test           # the full suite; needs no credentials
 npm run test:bless # re-record golden output after an intended change
 ```
 
-Requires **Node 24.x** (`.nvmrc`, `engines`). Vercel rejects anything newer.
-`dist/` is gitignored — regenerated on every build and every Vercel deploy.
+Requires **Node 24.x** (`.nvmrc`, `engines`); Vercel rejects anything newer.
+`dist/` is gitignored and regenerated on every build and deploy.
 
-Scripts that touch the live R2 bucket need credentials and are run by hand:
+To build a set of posts without R2, keep them in a directory outside the
+repository and point the build at it:
 
 ```bash
-node --env-file=.env scripts/probe-r2.mjs     # R2 capability probe
-node --env-file=.env scripts/verify-store.mjs # storage layer vs. real R2
+BLOG_POSTS_DIR=/tmp/posts BLOG_DIST_DIR=/tmp/dist npm run build
+```
+
+Each file there is `.md` or `.tex` with a YAML block at the top:
+
+```yaml
+---
+title: "Post title"           # required
+date: 2026-06-25              # required
+description: "1–2 line summary"
+tags: [machine-learning, vision]
+slug: custom-slug             # otherwise derived from the filename
+draft: true                   # excluded from the build
+---
+```
+
+Checks that drive a real browser need Chromium; set `CHROMIUM` if the binary is
+not `chromium-browser`:
+
+```bash
+node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
+node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
+```
+
+Scripts that touch the live R2 bucket need credentials and are run by hand.
+Each works under a throwaway prefix and cleans up after itself:
+
+```bash
+node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
+node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
+node --env-file=.env scripts/verify-publish.mjs  # publish and build from R2
+node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
 ```
 
 ---
 
 ## How it works
 
-| Path                          | Responsibility                                                       |
-| ----------------------------- | ------------------------------------------------------------------- |
-| `build.mjs`                   | Reads posts, renders, writes `dist/` (pages, tags, feed, sitemap)   |
-| `lib/markdown.mjs`            | `markdown-it` config: KaTeX math, highlight.js, anchors, link rules |
-| `lib/latex.mjs`               | `.tex` → HTML via `unified-latex` + KaTeX (pure JS, no pandoc)      |
-| `lib/templates.mjs`           | HTML shell, header/footer chrome, per-post SEO (OG, JSON-LD), `SITE`|
-| `lib/feed.mjs`                | RSS, sitemap (incl. tag URLs), robots.txt builders                  |
-| `assets/styles/blog.css`      | Design system + copied `katex.min.css` and fonts                    |
-| `assets/blog.js`              | Small runtime: mobile nav, feed/table switch, clickable rows, reveal |
-| `assets/images/`              | Global media → served at `/images/…`                                |
-| `assets/posts/<slug>/`        | Optional per-post JS/CSS embeds → `/assets/posts/<slug>/…`          |
-| `assets/vendor/`              | Self-hosted third-party libs (distill `template.v2.js`)             |
-| `lib/content.mjs`             | Source text → validated, rendered post. No filesystem access        |
-| `lib/listing.mjs`             | Listing model: feed pages split by rendered weight, embed rule      |
-| `lib/markup.mjs`              | Attribute edits so posts can share a page: ids, image sizes, lazy   |
-| `lib/server/config.mjs`       | R2 settings, validated; never logs a credential value               |
-| `lib/server/r2.mjs`           | R2 object store: JSON records, conditional writes, presigned URLs   |
-| `test/`                       | Golden output, contract invariants, tripwires, storage semantics    |
-| `scripts/`                    | Manual R2 probes (need credentials, not part of `npm test`)         |
-| `lib/server/publish.mjs`      | Freeze a revision to R2, update the slug index, fire the deploy hook |
-| `lib/server/published.mjs`    | Build-side reader: R2 revisions → rendered posts                    |
+| Path                  | Responsibility                                                   |
+| --------------------- | ---------------------------------------------------------------- |
+| `build.mjs`           | Reads posts, fetches media, writes `dist/`                       |
+| `lib/content.mjs`     | Source text → validated, rendered post; no filesystem access     |
+| `lib/markdown.mjs`    | `markdown-it` setup: KaTeX, highlight.js, anchors, link rules    |
+| `lib/latex.mjs`       | LaTeX → HTML via `unified-latex` and KaTeX, in pure JavaScript   |
+| `lib/sanitize.mjs`    | Trust by provenance, the URL policy, the HTML tree filter        |
+| `lib/attachments.mjs` | Resolves attachment references when a post is published          |
+| `lib/media.mjs`       | Identifies images and snippets from their bytes                  |
+| `lib/diagnostics.mjs` | Finds what the renderers dropped, for preview warnings           |
+| `lib/listing.mjs`     | Listing model: feed pages split by rendered weight               |
+| `lib/markup.mjs`      | Attribute edits that let posts share a page: ids, image sizes    |
+| `lib/templates.mjs`   | Page shell, header and footer, listings, per-post SEO, `SITE`    |
+| `lib/feed.mjs`        | RSS, sitemap, and `robots.txt`                                   |
+| `lib/server/`         | R2 store, object keys, drafts, uploads, publish, preview, auth   |
+| `api/`                | Vercel functions: login, editor, drafts, uploads, preview, publish |
+| `assets/`             | Site and editor styles and scripts, vendored distill             |
+| `test/`               | Golden output, contract invariants, tripwires, unit tests        |
+| `scripts/`            | Browser checks, live R2 checks, password setup, inventory        |
 
-The build is a single pass: parse frontmatter (`gray-matter`), render the body,
-detect math to gate the KaTeX stylesheet per page, sort newest-first, then emit:
+The build reads published posts from R2, or from `BLOG_POSTS_DIR`, fetches and
+verifies their images, renders each post, links the KaTeX stylesheet only on
+pages that need it, sorts newest-first, and emits:
 
-```
+```text
 dist/
-  index.html              # the listing: full articles, with a table view of every post
+  index.html              # the listing: full articles, with a table view
   page/<n>/index.html     # further feed pages, split by rendered weight
-  <slug>/index.html       # one per post (pretty URLs)
-  tags/<slug>/index.html  # one per distinct tag, paginated the same way
-  feed.xml  sitemap.xml  robots.txt  404.html
-  styles/   (blog.css, katex.min.css, fonts/)
-  images/   assets/posts/   assets/vendor/   blog.js   favicon.svg
+  <slug>/index.html       # one per post
+  tags/<slug>/index.html  # one per tag, paginated the same way
+  images/uploads/<slug>/  # published images
+  feed.xml  sitemap.xml  robots.txt  404.html  favicon.svg
+  build-manifest.json     # which post revisions this build contains
+  styles/                 # blog.css, editor.css, katex.min.css, fonts/
+  assets/                 # blog.js, editor.js, login.js, vendor/
 ```
 
 ---
 
 ## Deploy (Vercel)
 
-One repo ↔ one Vercel project (`weblog`), which will also serve `/editor` and
-`/api/*` as functions.
+One repository, one Vercel project (`weblog`): the static `dist/` plus the
+functions in `api/`, which serve `/login/`, `/editor/`, and `/api/*`. The build
+command, output directory, clean URLs, trailing slashes, rewrites, and cache
+headers are declared in `vercel.json`, so a new project needs no dashboard
+configuration. Node is pinned to 24.x.
 
-Build command and output directory are declared in `vercel.json`, so a freshly
-created project needs no dashboard configuration. Node is pinned to `24.x` in
-`engines` and `.nvmrc`.
+Pushing to `main` rebuilds the engine with the same content; publishing a post
+fires the deploy hook and rebuilds with the same engine. Fonts and KaTeX CSS
+are cached as immutable. Published images are revalidated instead, because a
+readable URL is not a content hash.
 
-Push to the repo → Vercel rebuilds and deploys. `vercel.json` also supplies clean
-URLs, trailing slashes, and immutable caching for fonts and KaTeX CSS. Assign the
-domain `blog.souravmishra.net` when ready (DNS `CNAME` → Vercel). If the origin
-changes, update `SITE.url` in [lib/templates.mjs](lib/templates.mjs) — it drives
-canonical URLs, Open Graph tags, the feed, and the sitemap.
+The site is served at `blog.souravmishra.net`. If the origin changes, update
+three things: `SITE.url` in [lib/templates.mjs](lib/templates.mjs), which drives
+canonical URLs, Open Graph tags, the feed, and the sitemap; `SITE_URL` in the
+project's environment, which sets the origin the editor accepts requests from
+(it otherwise defaults to `https://blog.souravmishra.net` in production); and
+the allowed origin in the R2 bucket's CORS rule.
 
-Environment variables live in Vercel project settings and, locally, in a
-gitignored `.env`. Nothing env-shaped is committed.
-
-Full step-by-step setup, DNS, and troubleshooting live in [INSTALL.md](INSTALL.md).
+Environment variables live in the Vercel project settings and, locally, in a
+gitignored `.env`. Nothing env-shaped is committed. Full setup, DNS, and
+troubleshooting are in [INSTALL.md](INSTALL.md).
 
 ---
 
-## Progress
+## Design notes
 
-Where the browser-authoring conversion has got to, and the decisions worth
-remembering. Full plan and rationale live in `CLAUDE.md` (not committed).
+Decisions and findings worth keeping, in roughly the order the engine was
+built.
 
-### Done — test harness and regression net
+### Test harness and regression net
 
-Built *before* touching the renderer, so the refactor could be verified rather
-than hoped at.
+Built *before* touching the renderer, so every later change could be verified
+rather than hoped at.
 
-- **Golden output.** An 8-post fixture corpus under `test/fixtures/`, a manifest
-  hashing every emitted file, and 7 full pages kept as text. A failing hash names
-  the page that moved; the stored pages show how. `npm run test:bless` re-records
-  deliberately — a diff under `test/golden/` means public output changed.
-- **Contract invariants.** Post and tag URLs, canonical matching emitted path,
-  feed and sitemap completeness, KaTeX gating, draft exclusion.
+- **Golden output.** A fixture corpus under `test/fixtures/`, a manifest
+  hashing every emitted file, and a handful of full pages kept as text. A
+  failing hash names the page that moved; the stored pages show how.
+  `npm run test:bless` re-records deliberately, and a diff under `test/golden/`
+  means public output changed.
+- **Contract invariants.** Post and tag URLs, canonicals matching emitted
+  paths, feed and sitemap completeness, KaTeX gating, draft exclusion, and both
+  listing views showing the same posts in the same order.
 - **Determinism.** Two builds of the same input must produce identical output.
 
-*Note:* `build.mjs` takes `BLOG_POSTS_DIR` / `BLOG_ASSETS_DIR` / `BLOG_DIST_DIR`
-overrides so tests build fixtures without touching real content. Adding them was
-verified byte-identical against the previous output before anything else moved.
+`build.mjs` takes `BLOG_POSTS_DIR`, `BLOG_ASSETS_DIR`, `BLOG_DIST_DIR`, and
+`BLOG_FEED_PAGE_BYTES` overrides, so tests build fixtures without touching real
+content. Adding them was verified byte-identical against the previous output
+before anything else moved.
 
-### Done — five live defects fixed
+### Live defects fixed
 
-Each found by reading the source, each with a named tripwire test written to fail
-first. All were shipping:
+Each one has a named tripwire test that fails if it comes back:
 
 | Defect | Fix |
 | --- | --- |
@@ -268,48 +311,49 @@ first. All were shipping:
 | Post order for equal dates depended on `readdir` order | Deterministic tie-break on slug |
 | Dates rendered a day early anywhere west of UTC | `formatDate` pinned to UTC |
 | `prefers-reduced-motion` disabled the animation that revealed content — those visitors got a blank page, as did anyone with JS off | Content visible by default; hidden only under `no-preference` **and** a `.js` root class |
+| The scroll reveal needed a tenth of an element on screen, which a post body taller than ten screens never is — long posts stayed blank | Reveal as soon as any part is visible |
 
-The timezone bug is the argument for the whole harness: this machine is
-UTC+9, so golden output never showed it. Only the multi-timezone tripwire caught it.
+The timezone bug is the argument for the whole harness: this machine is UTC+9,
+so golden output never showed it. Only the multi-timezone tripwire caught it.
 
-### Done — content pipeline extracted
+### Content pipeline
 
 `lib/content.mjs` turns source text into a validated, rendered post **with no
-filesystem access**. That decoupling is the point: the build feeds it files, and
-the R2 reader and editor preview will feed it strings, through one pipeline
-rather than three that drift. `build.mjs` dropped to ~118 lines and is now the
-only module that touches files.
+filesystem access**. That decoupling is the point: the build, the preview, and
+publishing all go through one pipeline, rather than three that drift.
+`build.mjs` is the only module that touches files.
 
-Added validation: reserved slugs (a post can no longer shadow `/tags/`, `/api/`,
-`/editor/`, `/404/`), unparseable dates, empty slugs, unknown formats — all
-reported as author-facing `ContentError`s rather than stack traces.
+Validation covers reserved slugs (a post cannot shadow `/tags/`, `/api/`,
+`/editor/`, `/page/` or other generated routes), unparseable dates, empty
+slugs, and unknown formats, all reported as author-facing `ContentError`s
+rather than stack traces.
 
-### Done — R2 storage layer
+### R2 storage layer
 
 `scripts/probe-r2.mjs` ran first, as a hard gate: "S3-compatible" does not
-guarantee any given S3 feature works, and the whole draft/session/job design
-rests on conditional writes. **16/16 passed** against `weblog-data` —
-`If-None-Match: *` and `If-Match` both honoured, both rejecting with 412 rather
-than silently overwriting; five concurrent racers on one key produced exactly one
-winner; read-after-write consistent; pagination, server-side copy and presigned
-PUT/GET all work; bucket confirmed private.
+guarantee that any given S3 feature works, and the whole draft, session and job
+design rests on conditional writes. **16/16 passed** against `weblog-data`.
+`If-None-Match: *` and `If-Match` were both honoured, both rejecting with 412
+rather than silently overwriting. Five concurrent racers on one key produced
+exactly one winner. Read-after-write was consistent; pagination, server-side
+copy, and presigned PUT and GET all worked; the bucket was confirmed private.
 
 On that basis `lib/server/r2.mjs` provides prefix-scoped objects, JSON records
-with `createJson` / `updateJson` / `mutateJson`, paginated listing, presigned
+with `createJson`, `updateJson`, and `mutateJson`, paginated listing, presigned
 URLs, and bounded retries.
 
 Two notes worth keeping:
 
 - **Retries exclude 412 on purpose.** A precondition failure is a real answer,
-  not a blip; retrying it would defeat the concurrency control it implements.
-  A test asserts the conflicting write is attempted exactly once.
-- **Test it two ways.** Unit tests run against an in-memory double so `npm test`
-  needs no credentials, but a double is only trustworthy while it matches
-  reality. `scripts/verify-store.mjs` runs the same module against the live
-  bucket, and it caught `list("")` throwing on real R2 while the double was
+  not a blip; retrying it would defeat the concurrency control it implements. A
+  test asserts the conflicting write is attempted exactly once.
+- **Test it two ways.** Unit tests run against an in-memory double, so
+  `npm test` needs no credentials, but a double is only trustworthy while it
+  matches reality. `scripts/verify-store.mjs` runs the same module against the
+  live bucket, and it caught `list("")` throwing on real R2 while the double was
   green. Run it whenever the storage layer or the double changes.
 
-### Done — drafts with immutable revisions
+### Drafts with immutable revisions
 
 `lib/server/drafts.mjs`. Every save writes a **new** revision object and then
 moves a single pointer to it, conditionally. Nothing is ever overwritten, so
@@ -317,147 +361,148 @@ revision history is a side effect rather than a feature to build.
 
 The ordering matters: revision first, pointer second. If the pointer update
 loses a race, the new revision is orphaned — harmless and collectable — while
-the previous draft stays intact. Losing the race must never lose work. There are
-tests for this against both the double and the real bucket.
+the previous draft stays intact. Losing the race must never lose work. There
+are tests for this against both the double and the real bucket.
 
-Drafts validate *loosely on absence, strictly on shape*: a half-written post with
-no title must still save, but a 10 MB title or a malformed date is refused. That
-caught a real bug — `2026-02-30` passes an ISO regex, and `Date` silently rolls
-it over to March 2. Validation now round-trips the parsed date and compares.
+Drafts validate *loosely on absence, strictly on shape*: a half-written post
+with no title must still save, but a 10 MB title or a malformed date is refused.
+That caught a real bug — `2026-02-30` passes an ISO regex, and `Date` silently
+rolls it over to March 2. Validation now round-trips the parsed date and
+compares.
 
-Revision ids are time-prefixed base36, so they sort chronologically as plain
-strings and history needs a listing rather than a read of every object.
+Revision ids sort chronologically as plain strings, so history needs a listing
+rather than a read of every object. They lead with the version number rather
+than a timestamp: two saves in the same millisecond would otherwise have sorted
+by their random suffix.
 
-### Done — auth primitives
+### Authentication
 
-`passwords.mjs`, `sessions.mjs`, `rate-limit.mjs`. Not yet wired to routes.
+`lib/server/passwords.mjs`, `lib/server/sessions.mjs`, and
+`lib/server/rate-limit.mjs`.
 
-- **Password.** scrypt via `node:crypto`, parameters stored inside the hash
-  string so cost can be raised later without invalidating the existing password.
-  Benchmarked on this machine: 63 ms at N=2^15, 261 ms at N=2^17 (~128 MB).
-  Settled on 2^17 — login happens about once per idle window, so a quarter
-  second is imperceptible and four times the work for anyone cracking a stolen
-  hash offline. Set one with `node scripts/set-password.mjs`, which prompts with
-  echo off and refuses to read from a pipe.
-- **Sessions.** Random tokens, only their SHA-256 stored, so read access to the
-  bucket hands over nothing usable. Idle timeout of 8 h refreshed on activity,
-  hard 7-day ceiling. Expiry is enforced on every read, not by a sweep — a
-  record that outlives its deadline never authenticates even if cleanup has not
-  run. Rotating `AUTH_VERSION` revokes everything at once.
+- **Password.** scrypt via `node:crypto`, with its parameters stored inside the
+  hash string, so cost can be raised later without invalidating the existing
+  password. Benchmarked at 63 ms for N=2^15 and 261 ms for N=2^17 (~128 MB).
+  Settled on 2^17: login happens about once per idle window, so a quarter
+  second is imperceptible, and it is four times the work for anyone cracking a
+  stolen hash offline. Set one with `node scripts/set-password.mjs`, which
+  prompts with echo off and refuses to read from a pipe.
+- **Sessions.** Random tokens, with only their SHA-256 stored, so read access to
+  the bucket hands over nothing usable. The idle timeout is 8 hours, refreshed
+  on activity, with a hard 7-day ceiling. Expiry is enforced on every read, not
+  by a sweep, so a record that outlives its deadline never authenticates even
+  if cleanup has not run. Rotating `AUTH_VERSION` revokes every session at once.
 - **CSRF.** Derived from the session's own secret by HMAC rather than stored, so
-  there is no second record to keep in sync and a token lifted from one session
+  there is no second record to keep in sync, and a token lifted from one session
   cannot be replayed against another.
 - **Rate limiting.** Durable in R2, because serverless instances share no memory
   and an in-memory counter resets on every cold start. Per-client *and* global
   limits: the first stops guessing at one password, the second stops a spray
   where no single address trips it. Client addresses come only from
-  platform-set forwarding metadata — a browser-settable `X-Forwarded-For` would
+  platform-set forwarding metadata; a browser-settable `X-Forwarded-For` would
   let an attacker pick a new identity per attempt. Fails closed if the store is
   unreadable.
 
-Lockout recovery is the 15-minute window expiring on its own; for an emergency,
-changing `ADMIN_PASSWORD_HASH` sets a new password *and* kills every session. No
-bypass secret — it would be a second credential of equal power that never gets
-rotated.
+Lockout recovery is the 15-minute window expiring on its own. In an emergency,
+changing `ADMIN_PASSWORD_HASH` sets a new password *and* ends every session.
+There is no bypass secret: it would be a second credential of equal power that
+never gets rotated.
 
-*Bug worth remembering:* revision ids were originally timestamp-led, so two
-saves in the same millisecond sorted by their random suffix. Debounced autosave
-does exactly that. Ids are now version-led, which cannot tie.
+### Editor API
 
-### Done — editor API
-
-Routes under `api/`: login, logout, session, list/create drafts,
-get/save/delete a draft. Guards live in `lib/server/http.mjs`, not in each
-handler, so adding a route cannot accidentally omit one — a route opts *out*
-explicitly and never has to remember to opt in.
-
-Verified against the live deployment: anonymous callers get 401 on every
-private route, a cross-origin login gets 403, and a wrong password gets 401
-with no cookie set.
+Routes under `api/`: login, logout and session; draft listing, creation,
+reading, saving and discarding; uploads; preview; publish. The guards live in
+`lib/server/http.mjs`, not in each handler, so adding a route cannot
+accidentally omit one: a route opts *out* explicitly and never has to remember
+to opt in.
 
 - Login is rate limited *before* the password is read, so a locked-out caller
-  cannot keep paying for scrypt work. Wrong password, absent password and an
-  unconfigured server are indistinguishable in the response.
+  cannot keep paying for scrypt work. A wrong password, an absent password, and
+  an unconfigured server are indistinguishable in the response.
 - Origins are matched exactly. A suffix test is how this check usually gets
   defeated; there is a test for `blog.souravmishra.net.attacker.com`.
-- A missing `Origin` on a mutation is refused, not allowed — browsers always
-  send it there, so its absence means something that is not a browser.
+- A missing `Origin` on a mutation is refused, not allowed. Browsers always send
+  it there, so its absence means something that is not a browser.
 - A stale save returns **409 carrying the current draft and its ETag**, so the
-  editor can show a real diff rather than reporting that work vanished.
-  Saving with no ETag is 428, never a silent clobber.
+  editor can show what changed rather than reporting that work vanished. Saving
+  with no ETag is 428, never a silent clobber.
 
 *Deployment findings worth keeping:*
 
 - `trailingSlash` in `vercel.json` applies to API routes too, so `/api/x`
-  308-redirects to `/api/x/`. POST survives it with the method intact, but the
+  308-redirects to `/api/x/`. POST survives with its method intact, but the
   editor calls API paths **with** the trailing slash to skip the round trip.
-  Removing `trailingSlash` is not an option — the public post URLs and their
-  canonical tags depend on it.
+  Dynamic routes must be nested as `[id]/index.js`, or they never match. Removing
+  `trailingSlash` is not an option: public post URLs and their canonical tags
+  depend on it.
 - Vercel serves `api/` functions alongside a static `outputDirectory`, imports
-  from `lib/` outside `api/` resolve once bundled, and the function reaches R2
+  from `lib/` outside `api/` resolve once bundled, and the functions reach R2
   with production credentials. Confirmed by a throwaway probe rather than
   assumed.
 - Production uses `R2_PREFIX=prod`; local development defaults to `dev`, so
   local work cannot touch published data.
 
-### Done — editor and login pages
+### Editor and login pages
 
-`/login/` and `/editor/` are served by functions, never emitted into `dist/` —
-anything in `dist/` is public and the editor markup must not be. An
+`/login/` and `/editor/` are served by functions, never emitted into `dist/`:
+anything in `dist/` is public, and the editor markup must not be. An
 unauthenticated `/editor/` redirects to `/login/` rather than returning a JSON
 401, since it is a browser navigation; `/login/` redirects back when a session
 already exists.
 
 Editor pages send a strict CSP with **no inline script**, plus `noindex`,
-`nosniff` and `no-store`. §3.1 of the plan records why that is required rather
-than nice to have: the editor shares an origin with published posts that can
-carry custom JavaScript.
+`nosniff`, and `no-store`. That is required rather than nice to have: the editor
+shares an origin with the published site, so any script that reached a
+published page would run where the editor session lives. The preview frame is
+sandboxed with no permissions at all, so a script placed in a preview cannot
+run either.
 
-The client is dependency-free — metadata fields, a textarea, conditional saves,
-Ctrl/Cmd-S, and a `beforeunload` guard.
+The client is dependency-free: metadata fields, a textarea, attachments, a live
+preview, conditional saves, Ctrl/Cmd-S, and a `beforeunload` guard.
 
 - "Unsaved" is a comparison against what was last persisted, not a flag that can
   drift out of sync with the fields.
 - A 409 opens a dialog rather than resolving silently. Both versions are real
   work, and the wording says plainly which button discards what.
-- A 401 mid-session does **not** clear the editor. It says the session ended and
-  points at Export, which writes the current text to a local file and depends on
-  neither the network nor the session.
+- A 401 mid-session does **not** clear the editor. It says the session ended
+  and points at Export, which writes the current text to a local file and
+  depends on neither the network nor the session.
 
 *Bug worth remembering:* accepting HEAD wherever GET is allowed, but passing it
-through unchanged, meant `HEAD /api/drafts/` reached the create branch —
-handlers dispatch on `req.method` with the mutating path as the fall-through, so
+through unchanged, meant `HEAD /api/drafts/` reached the create branch.
+Handlers dispatch on `req.method` with the mutating path as the fall-through, so
 a HEAD request would have created a draft. HEAD is now normalized to GET before
-any handler runs, which makes that whole class of mistake impossible rather than
-something each handler has to remember.
+any handler runs, which makes that whole class of mistake impossible rather
+than something each handler has to remember.
 
-### Done — inventory and garbage collection
+### Inventory and garbage collection
 
 `inventory.json` in R2 is a tree of every post, its revisions, and its media,
 plus orphaned media and pending uploads. `formatTree` prints it readably:
 
-```
-node --env-file=.env scripts/inventory.mjs          # print the tree
-node --env-file=.env scripts/inventory.mjs --gc     # what would be swept
-node --env-file=.env scripts/inventory.mjs --gc --apply
+```bash
+node --env-file=.env scripts/inventory.mjs               # print the tree
+node --env-file=.env scripts/inventory.mjs --gc          # what would be swept
+node --env-file=.env scripts/inventory.mjs --gc --apply  # sweep
 ```
 
-The file is **derived, never maintained** — rebuilt from the published index,
-draft pointers and the objects actually present, rather than patched as things
-change. An incrementally-updated index becomes a second source of truth and
-eventually disagrees with reality, which is worst precisely when deciding what
-to delete.
+The file is **derived, never maintained**: it is rebuilt from the published
+index, the draft pointers, and the objects actually present, rather than patched
+as things change. An incrementally updated index becomes a second source of
+truth and eventually disagrees with reality, which is worst precisely when
+deciding what to delete.
 
 Collection is **ownership-scoped**, not reachability-scoped. Every object
 carries its owning post's id in its key (`lib/server/keys.mjs`), so deletion is
 always scoped to one post:
 
-```
+```text
 drafts/<postId>/current.json
 drafts/<postId>/revisions/<revisionId>.json
 published/posts/<postId>/<revisionId>.json
 published/media/<postId>/<name>        -> /images/uploads/<slug>/<name>
-uploads/<postId>/<uploadId>/<name>
+uploads/<postId>/<uploadId>/…
+attachments/<postId>/…
 ```
 
 That bounds the blast radius. A global mark-and-sweep that misses one edge
@@ -466,11 +511,12 @@ worked on, and other posts' objects are unreachable **by construction** rather
 than by care. `deletePostObjects` re-checks every key it collected and refuses
 outright if one is not owned by the post being deleted.
 
-Keys use the post **id**, never the slug — slugs are human-chosen and reusable,
-so a new post could otherwise inherit a deleted one's directory. Public URLs stay
-slug-based and readable; the build maps between them. Nothing is shared between
-posts, so the same image in three posts is stored three times: that forgoes
-deduplication so deleting one post can never remove a file another still uses.
+Keys use the post **id**, never the slug: slugs are human-chosen and reusable,
+so a new post could otherwise inherit a deleted one's directory. Public URLs
+stay slug-based and readable, and the build maps between them. Nothing is shared
+between posts, so the same image in three posts is stored three times. That
+forgoes deduplication so that deleting one post can never remove a file another
+still uses.
 
 Four further guards:
 
@@ -478,36 +524,28 @@ Four further guards:
 | --- | --- |
 | Current published revision, current draft and its pointer are never collectable | Losing one loses a post |
 | Nothing younger than 1 hour is ever swept | A new object may belong to an upload or publish still in flight |
-| Keys matching no known pattern are reported, never deleted | Far likelier that `keys.mjs` is out of date than that the object is rubbish |
+| Keys matching no known pattern are reported, never deleted | Far likelier that `lib/server/keys.mjs` is out of date than that the object is rubbish |
 | Dry by default, bounded per run | The failure mode is losing work, not wasting bytes |
 
 Retention: superseded published revisions 90 days (the rollback window), draft
 history 30 days or 20 revisions per post, unattached uploads 24 hours.
 
-It runs automatically after publish, unpublish and draft discard, and never
-throws — a publish that succeeded must not be reported as failed because
-housekeeping afterwards did not.
-
-*Why this matters now:* every draft save writes an immutable revision. Without
-a sweep, autosave alone would grow the bucket forever.
-
-### Next
-
-Publish: freeze a revision to R2, fire the deploy hook, teach the build to read
-from R2, and migrate `content/posts/` out of the repo, auth, uploads,
-the editor UI, and finally publication + the migration that empties
-`content/posts/` and `assets/images/` into R2.
+It runs automatically after publish, unpublish, and draft discard, and never
+throws: a publish that succeeded must not be reported as failed because
+housekeeping afterwards did not. Every draft save writes an immutable revision,
+so without a sweep, saving alone would grow the bucket forever.
 
 ---
 
 ## Design parity
 
-This repo intentionally **duplicates** the main site's look so it can live on a
-separate origin. If `souravmishra.net`'s design changes, mirror it here:
+This repository intentionally **duplicates** the main site's look so it can live
+on a separate origin. If `souravmishra.net`'s design changes, mirror it here:
 
-- `:root` design tokens and the header/footer/`.nav-bar` chrome live at the top
-  of `assets/styles/blog.css` — copied from the main site's `styles/site.css`.
-- The SVG icon sprite + nav markup live in `lib/templates.mjs` — copied from the
+- `:root` design tokens and the header, footer, and `.nav-bar` chrome live at
+  the top of `assets/styles/blog.css`, copied from the main site's
+  `styles/site.css`.
+- The SVG icon sprite and nav markup live in `lib/templates.mjs`, copied from the
   main site's `index.html`.
 
 Keeping these in sync is a manual, occasional task; the tokens rarely change.
