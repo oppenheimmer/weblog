@@ -115,6 +115,56 @@ twice gives `image.png` and `image-2.png`. Published pages carry each image's
 width and height, so the page does not jump as images load. Snippets render
 inline as part of the article.
 
+### Interactive posts *(planned, not implemented)*
+
+Interactive publishing will have two explicit paths. The choice describes how closely the animation needs to
+work with the article:
+
+| Path | Markdown | Use it for | Where its code runs |
+| --- | --- | --- | --- |
+| **Article figure** | `::figure[<id>]` | A Distill-style figure tied to the prose, page layout, theme or scroll position | Directly in the post page |
+| **Interactive lab** | `::demo[<id>]` | A self-contained simulation, playground or larger application | In a sandboxed iframe |
+
+An article figure intentionally has the same page access as the blog's own JavaScript. That is what lets it react
+to nearby text or scrolling. Only an interactive folder explicitly attached, verified and published by the owner
+can receive this access; ordinary Markdown still cannot contain raw HTML, `<script>` elements or script
+frontmatter. A figure exports a standard `mount(element, options)` function, and the engine gives it a unique
+element on its post page. Its code does not run in the feed or tag listings.
+
+An interactive lab is an ordinary small web folder displayed inside a sealed frame. JavaScript, canvas, SVG,
+WebGL and controls work inside it, but it cannot read the article, editor or login session. Both the iframe and
+the lab page's response apply the sandbox, so opening the lab URL directly does not remove the protection. A
+small checked message channel may pass presentation values such as theme, reduced-motion preference and height.
+
+Everything remains on **`blog.souravmishra.net`**. There is no separate demo hostname. The `/demos/` path receives
+special sandbox headers, while its immutable public asset files receive only the narrow read permission needed
+for local module imports and data files. Editor and API responses never receive that permission. Outside scripts,
+CDNs and data services are not part of either path: Distill, D3, fonts, data and other dependencies must be hosted
+by this blog.
+
+Both paths upload an immutable folder with a manifest and a required static fallback. For example:
+
+```text
+double-pendulum/
+├── index.html
+├── demo.js
+├── demo.css
+├── equations.json
+└── fallback.png
+```
+
+R2 places that folder below generated post, interactive and revision ids for safe ownership. It does **not**
+rename `demo.js` or break `./equations.json`. The build maps those private ids to a readable, revisioned public
+path such as `/demos/<post-slug>/double-pendulum/<revision>/`; every relative filename remains unchanged.
+
+The ordinary editor preview remains script-free. A deliberate **Run interactive preview** action will execute a
+lab in its production sandbox or grant a verified article figure its documented page access. Listings, printing,
+no-JavaScript browsers, loading and failures show the required fallback instead.
+
+Interactive folders are content, not engine code. They live in R2, never in Git. A future staging push may send a
+Markdown file and its interactive folders through the same publication service, verify every uploaded byte, and
+remove only the confirmed local files. The folder must be empty after a successful push.
+
 ### Feed and table
 
 The home page and every tag page show posts two ways, switched with the
@@ -129,7 +179,7 @@ The home page and every tag page show posts two ways, switched with the
 The reader's choice is remembered in their browser, and `?view=feed` or
 `?view=table` overrides it for one visit.
 
-### Embed hooks for trusted posts
+### Legacy embed hooks for local builds
 
 Posts read from a local directory through `BLOG_POSTS_DIR` are treated as
 repository-authored and trusted. They may contain raw HTML and set per-post
@@ -150,7 +200,9 @@ every hook, with their assets in `test/fixtures/assets/posts/`.
 Posts published from the editor can never set these hooks, and their raw HTML
 is escaped. In listings, a post that uses a hook appears as its title and
 description with a link rather than inline, because its code assumes it owns
-the page. It runs on its own page, once.
+the page. It runs on its own page, once. This compatibility path is not the
+planned R2 interactive system above: Distill supplies article components and
+layout, while the post's own linked JavaScript supplies its animation.
 
 ---
 
@@ -246,6 +298,10 @@ dist/
   styles/                 # blog.css, editor.css, katex.min.css, fonts/
   assets/                 # blog.js, editor.js, login.js, vendor/
 ```
+
+When interactive publishing lands, the same build will also verify interactive manifests and emit immutable
+figure assets below `/assets/figures/<post-slug>/…` and sealed lab folders below
+`/demos/<post-slug>/…`. No runtime server will read R2 for a public post.
 
 ---
 
@@ -455,7 +511,9 @@ Editor pages send a strict CSP with **no inline script**, plus `noindex`,
 shares an origin with the published site, so any script that reached a
 published page would run where the editor session lives. The preview frame is
 sandboxed with no permissions at all, so a script placed in a preview cannot
-run either.
+run either. Planned article figures are the narrow owner-authorized exception:
+they receive page access only through a verified `::figure` record. Planned
+`::demo` labs remain sandboxed even though their files use the same hostname.
 
 The client is dependency-free: metadata fields, a textarea, attachments, a live
 preview, conditional saves, Ctrl/Cmd-S, and a `beforeunload` guard.
@@ -504,6 +562,10 @@ published/media/<postId>/<name>        -> /images/uploads/<slug>/<name>
 uploads/<postId>/<uploadId>/…
 attachments/<postId>/…
 ```
+
+Planned interactive bundles extend this ownership tree with
+`interactives/<postId>/<interactiveId>/<revision>/…`. Their readable public
+paths are produced by the build; the private keys never appear in Markdown.
 
 That bounds the blast radius. A global mark-and-sweep that misses one edge
 deletes across every post; here a mistake can only damage the post already being
