@@ -342,3 +342,39 @@ test("safe attributes and ordinary structure pass through untouched", () => {
   assert.deepEqual(node.properties.className, ["x"]);
   assert.equal(node.properties.id, "y");
 });
+
+// ------------------------------------------------- the tex-snippet fence path
+//
+// lib/attachments.mjs turns an attached `.tex` snippet into a ```tex-snippet
+// fence, which the Markdown renderer sends through renderLatex. That is a new
+// route from browser-authored text to rendered markup, so it needs the same
+// scrutiny as the body itself — and a post author can type the fence directly,
+// not only receive one from the resolver.
+
+test("a tex-snippet fence renders LaTeX but cannot carry script", () => {
+  const hostile = [
+    "```tex-snippet",
+    "\\href{javascript:alert(1)}{click}",
+    "\\url{javascript:alert(1)}",
+    "<script>alert(1)</script>",
+    "```",
+  ].join("\n");
+  const html = mdBrowser.render(hostile);
+  assert.deepEqual(liveMarkup(html), [], `leaked: ${html}`);
+  assert.ok(!/href="\s*javascript/i.test(html), "a script URL survived the fence");
+});
+
+test("a tex-snippet fence renders real content and maths", () => {
+  const html = mdBrowser.render("```tex-snippet\n\\section{Hello}\nText $x^2$.\n```");
+  assert.match(html, /class="tex-snippet"/);
+  assert.match(html, /Hello/);
+  assert.match(html, /class="katex/);
+  // Not double-wrapped in a code block, which would show the markup as text.
+  assert.ok(!/<pre><code class="language-tex-snippet"/.test(html));
+});
+
+test("an ordinary code fence is still a code fence", () => {
+  const html = mdBrowser.render("```js\nconst x = 1;\n```");
+  assert.match(html, /class="hljs/);
+  assert.ok(!/tex-snippet/.test(html));
+});
