@@ -78,21 +78,22 @@ test("publishing freezes final image paths into the revision", async () => {
 
 test("every image is in place before the index names the revision", async () => {
   // The index update is the commit point; a build may start the moment it
-  // lands. An image copied after it is an image a build can miss.
-  const order = [];
-  let mediaKey;
-  const h = harness({
-    storeFor: (store) => ({
-      ...store,
-      async createJson(key, data) {
-        if (key === INDEX_KEY) order.push((await store.head(mediaKey)) ? "media, then index" : "index, then media");
-        return store.createJson(key, data);
-      },
-    }),
-  });
+  // lands. An image copied after it is an image a build can miss. Watched at
+  // the storage client, which every write passes through whichever store
+  // method makes it.
+  const h = harness();
   const postId = await newDraft(h);
   const image = await attach(h, postId, PNG, { name: "diagram.png" });
-  mediaKey = keys.media(postId, image.publicName);
+  const mediaKey = keys.media(postId, image.publicName);
+
+  const order = [];
+  const send = h.client.send.bind(h.client);
+  h.client.send = async (command) => {
+    if (command.constructor.name === "PutObjectCommand" && command.input.Key === h.store.key(INDEX_KEY)) {
+      order.push(h.client.objects.has(h.store.key(mediaKey)) ? "media, then index" : "index, then media");
+    }
+    return send(command);
+  };
   await h.publisher.publish(await withBody(h, postId, `![x](attachment://${image.id})`));
 
   assert.deepEqual(order, ["media, then index"]);

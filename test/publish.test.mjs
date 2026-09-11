@@ -222,7 +222,7 @@ test("published posts come back newest first", async () => {
 test("unpublishing removes the post but keeps the revision for rollback", async () => {
   const { publisher, store } = harness();
   await publisher.publish(complete());
-  await publisher.unpublish("a-complete-post");
+  await publisher.unpublish("p_00000000000000aa");
 
   assert.deepEqual(await loadPublishedPosts({ store }), []);
   const revision = await store.getJson(revisionKey("p_00000000000000aa", "r_000001_abc_1234"));
@@ -231,7 +231,7 @@ test("unpublishing removes the post but keeps the revision for rollback", async 
 
 test("unpublishing something absent is a no-op, not an error", async () => {
   const { publisher } = harness();
-  assert.deepEqual(await publisher.unpublish("never-existed"), { ok: true, changed: false });
+  assert.deepEqual(await publisher.unpublish("p_000000000000ffff"), { ok: true, changed: false });
 });
 
 // ---------------------------------------------------------------- end to end

@@ -200,13 +200,28 @@ test("a post nothing references any more is collectable in full", async () => {
   const { store, publisher, client } = harness();
   await publisher.publish(complete());
   await store.put(keys.media(A, "diagram.png"), Buffer.from("bytes"));
-  await publisher.unpublish("a-post");
+  await publisher.unpublish(A);
   backdate(client, "", 400 * DAY);
 
   const tree = await buildInventory(store);
   assert.deepEqual(tree.orphanPostIds, [A], "the unreferenced post was not seen as orphaned");
   const doomed = collectableForPost(tree.posts[0]);
   assert.ok(doomed.some((d) => d.key === keys.media(A, "diagram.png")), "its media was kept");
+});
+
+test("a post unpublished without a draft stays whole while it can still be put back", async () => {
+  // A post migrated from the repository has no draft, so once unpublished
+  // nothing references it. Without this it went an hour later, rollback window
+  // or not.
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  await store.put(keys.media(A, "diagram.png"), Buffer.from("bytes"));
+  await publisher.unpublish(A);
+  backdate(client, "", 30 * DAY);
+
+  const tree = await buildInventory(store);
+  assert.deepEqual(tree.orphanPostIds, [A]);
+  assert.deepEqual(collectableForPost(tree.posts[0]), [], "a post inside its rollback window was marked collectable");
 });
 
 test("superseded revisions survive the rollback window and go after it", async () => {
@@ -323,7 +338,7 @@ test("the tree is derived, so it cannot repeat a stale claim", async () => {
   const { store, publisher } = harness();
   await publisher.publish(complete());
   await refreshInventory(store);
-  await publisher.unpublish("a-post");
+  await publisher.unpublish(A);
 
   const rebuilt = await buildInventory(store);
   assert.notEqual(rebuilt.posts[0]?.state, "published",

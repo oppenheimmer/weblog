@@ -1,8 +1,9 @@
-// The editor client (CLAUDE.md Step 5, Slice 1).
+// The editor client (CLAUDE.md Step 5, Step 7).
 //
 // Deliberately small and dependency-free: a textarea, metadata fields,
-// conditional saves, attachments uploaded straight to storage, and a preview
-// rendered by the server into a sandboxed frame.
+// conditional saves, attachments uploaded straight to storage, a preview
+// rendered by the server into a sandboxed frame, and what the site actually
+// shows of each published post.
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -18,6 +19,11 @@ const els = {
     attachmentList: $("attachment-list"), attachStatus: $("attach-status"),
     writing: $("writing"), previewToggle: $("preview-toggle"), previewPane: $("preview-pane"),
     previewFrame: $("preview-frame"), previewState: $("preview-state"), diagnostics: $("diagnostics"),
+    publicationList: $("publication-list"), publicationEmpty: $("publication-empty"),
+    publication: $("publication"), publicationChip: $("publication-chip"),
+    publicationSummary: $("publication-summary"), publicationRevision: $("publication-revision"),
+    publicationRollback: $("publication-rollback"), publicationRebuild: $("publication-rebuild"),
+    publicationUnpublish: $("publication-unpublish"),
 };
 
 const state = {
@@ -31,7 +37,14 @@ const state = {
     conflict: null,
     saving: false,
     attachments: [],
+    drafts: [],
     preview: { open: false, seq: 0, controller: null, timer: null, refresher: null, lastKey: null },
+    // What the site shows. `selected` is a post picked from "On the site" whose
+    // draft is not the one open; otherwise the panel follows the open draft.
+    publications: [],
+    site: null,
+    selected: null,
+    watch: { timer: null, startedAt: null, delay: 0, gaveUp: false },
 };
 
 const FIELDS = ["title", "date", "format", "slug", "description", "tags", "body"];
@@ -65,8 +78,14 @@ function slugify(value) {
     return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-/** Every request carries the CSRF token; reads simply ignore it. */
-async function api(path, { method = "GET", body, etag, signal } = {}) {
+/**
+ * Every request carries the CSRF token; reads simply ignore it.
+ *
+ * A 409 is an error like any other unless the caller says it resolves conflicts
+ * itself, and only a draft save does. When every 409 came back as a success, a
+ * publish refused for its address reported itself as published.
+ */
+async function api(path, { method = "GET", body, etag, signal, conflict = false } = {}) {
     const headers = { "content-type": "application/json" };
     if (state.csrf) headers["x-csrf-token"] = state.csrf;
     if (etag) headers["if-match"] = etag;
@@ -85,7 +104,7 @@ async function api(path, { method = "GET", body, etag, signal } = {}) {
         throw new Error("unauthenticated");
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok && res.status !== 409) {
+    if (!res.ok && !(conflict && res.status === 409)) {
         throw Object.assign(new Error(data.message || `Request failed (${res.status})`), { data, status: res.status });
     }
     return { res, data };
@@ -129,6 +148,7 @@ const isDirty = () =>
 async function refreshList() {
     const { data } = await api("/api/drafts/");
     const drafts = data.drafts ?? [];
+    state.drafts = drafts;
     els.draftList.replaceChildren();
     els.draftEmpty.hidden = drafts.length > 0;
 
@@ -151,6 +171,7 @@ async function refreshList() {
         li.append(button);
         els.draftList.append(li);
     }
+    renderPublications();
 }
 
 async function openDraft(postId) {
@@ -159,11 +180,13 @@ async function openDraft(postId) {
     state.postId = data.draft.postId;
     state.etag = data.etag;
     state.version = data.draft.version;
+    state.selected = null;
     writeForm(data.draft);
     state.saved = readForm();
     await loadAttachments();
     setStatus(`saved · v${data.draft.version}`);
     setError("");
+    els.publishedNote.textContent = "";
     await refreshList();
 }
 
@@ -172,11 +195,13 @@ async function newPost() {
     state.postId = null;
     state.etag = null;
     state.version = null;
+    state.selected = null;
     writeForm({ date: new Date().toISOString().slice(0, 10) });
     state.saved = readForm();
     await loadAttachments();
     setStatus("not saved");
     setError("");
+    els.publishedNote.textContent = "";
     await refreshList();
 }
 
@@ -222,7 +247,7 @@ async function save({ force = false } = {}) {
         }
 
         const { res, data } = await api(`/api/drafts/${state.postId}/`, {
-            method: "PUT", body: fields, etag: force ? state.conflict?.etag : state.etag,
+            method: "PUT", body: fields, etag: force ? state.conflict?.etag : state.etag, conflict: true,
         });
 
         if (res.status === 409) {
@@ -499,6 +524,225 @@ function setPreviewOpen(open) {
     }
 }
 
+// ---------------------------------------------------------------- the site
+
+// The server decides each state from the build manifest the site is serving
+// (lib/server/deployments.mjs); these are only its names for the author.
+const SITE_LABELS = {
+    live: "Live", updating: "Updating", pending: "Not live yet",
+    removing: "Coming down", offline: "Unpublished", unknown: "Not checked",
+};
+const UNSETTLED = new Set(["pending", "updating", "removing"]);
+// After a change, check soon, then less often, and stop after a while: a build
+// that has not landed in fifteen minutes has usually failed.
+const WATCH_FIRST_MS = 4000;
+const WATCH_MAX_MS = 30_000;
+const WATCH_GIVE_UP_MS = 15 * 60 * 1000;
+// Vercel allows 60 deploy-hook calls an hour; a pause stops repeated clicks spending them.
+const REBUILD_PAUSE_MS = 30_000;
+
+async function refreshPublications() {
+    const { data } = await api("/api/publish/");
+    state.publications = data.publications ?? [];
+    state.site = data.site ?? null;
+    renderPublications();
+}
+
+const publicationFor = (postId) => state.publications.find((p) => p.postId === postId) ?? null;
+/** The publication the panel shows: one picked from the list, else the open draft's. */
+const shownPublication = () => publicationFor(state.selected ?? state.postId);
+
+const nameOf = (publication) => `“${publication.title || publication.slug}”`;
+const revisionLabel = (revision) =>
+    !revision ? "an earlier revision" : revision.version ? `revision ${revision.version}` : revision.revisionId;
+const formatWhen = (iso) =>
+    iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
+
+function renderPublications() {
+    const shown = shownPublication();
+    els.publicationList.replaceChildren(...state.publications.map((publication) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        if (publication === shown) button.setAttribute("aria-current", "true");
+
+        const title = document.createElement("span");
+        title.className = "draft-title";
+        title.textContent = publication.title || publication.slug;
+
+        const meta = document.createElement("span");
+        meta.className = "draft-meta";
+        meta.textContent = `/${publication.slug}/ · ${SITE_LABELS[publication.site?.state] ?? SITE_LABELS.unknown}`;
+
+        button.append(title, meta);
+        button.addEventListener("click", guard(() => showPublication(publication.postId)));
+        const li = document.createElement("li");
+        li.append(button);
+        return li;
+    }));
+    els.publicationEmpty.hidden = state.publications.length > 0;
+    renderPanel();
+}
+
+/** A post picked from "On the site": its draft opens when it has one; the panel shows it either way. */
+async function showPublication(postId) {
+    if (postId !== state.postId && state.drafts.some((draft) => draft.postId === postId)) {
+        await openDraft(postId);
+    }
+    // A draft that did not open, because unsaved changes were kept, leaves the
+    // panel on the post that was asked for. The panel names its post.
+    state.selected = postId === state.postId ? null : postId;
+    renderPublications();
+    els.publication.scrollIntoView({ block: "nearest", behavior: "instant" });
+}
+
+function renderPanel() {
+    const publication = shownPublication();
+    els.publication.hidden = !publication;
+    if (!publication) return;
+
+    const siteState = publication.site?.state ?? "unknown";
+    els.publicationChip.textContent = SITE_LABELS[siteState];
+    els.publicationChip.dataset.state = siteState;
+
+    const revision = (id) => publication.revisions.find((r) => r.revisionId === id);
+    const link = document.createElement("a");
+    link.href = `/${publication.slug}/`;
+    link.textContent = `/${publication.slug}/`;
+    const words = (text) => document.createTextNode(text);
+    const name = nameOf(publication);
+    const summary = {
+        live: [words(`${name} is live at `), link, words(`, showing ${revisionLabel(revision(publication.revisionId))}.`)],
+        updating: [words(`${name} is published as ${revisionLabel(revision(publication.revisionId))}, but `), link,
+            words(` still shows ${revisionLabel(revision(publication.site?.revisionId))} until the rebuild finishes.`)],
+        pending: [words(`${name} is published, but `), link, words(" does not show it yet. Waiting for the rebuild…")],
+        removing: [words(`${name} is unpublished, but `), link, words(" shows it until the rebuild finishes.")],
+        offline: [words(`${name} is not on the site. Its revisions are kept for 90 days, so it can be put back.`)],
+        unknown: [words(`${name} is ${publication.published ? "published at" : "unpublished from"} `), link,
+            words(`. Whether the site shows that could not be checked: ${state.site?.reason ?? "no answer"}.`)],
+    }[siteState];
+    if (state.watch.gaveUp && UNSETTLED.has(siteState)) {
+        summary.push(words(" Nothing has changed for 15 minutes, so the build may have failed. " +
+            "Check the deployment in Vercel, then Rebuild site."));
+    }
+    els.publicationSummary.replaceChildren(...summary);
+
+    // Rebuilt only when the choices change, so a check every few seconds does
+    // not undo a revision the author is in the middle of picking.
+    const select = els.publicationRevision;
+    const signature = JSON.stringify([publication.postId, publication.revisionId, publication.site?.revisionId,
+        publication.revisions.map((r) => r.revisionId)]);
+    if (select.dataset.signature !== signature) {
+        const samePost = select.dataset.postId === publication.postId;
+        // The author's own pick survives; a default does not, so publishing a
+        // newer revision moves the choice to it rather than offering a rollback.
+        const picked = samePost && select.value !== select.dataset.default ? select.value : null;
+        // Once unpublished, the default is what was on the site until then, for
+        // as long as this page remembers it; otherwise the newest stored revision.
+        const remembered = samePost && !publication.published ? select.dataset.default : null;
+        const fallback = publication.revisionId ??
+            (revision(remembered) ? remembered : publication.revisions[0]?.revisionId) ?? "";
+        select.replaceChildren(...publication.revisions.map((stored) => {
+            const marks = [
+                stored.revisionId === publication.revisionId ? "published" : null,
+                stored.revisionId === publication.site?.revisionId ? "on the site" : null,
+            ].filter(Boolean);
+            const option = document.createElement("option");
+            option.value = stored.revisionId;
+            option.textContent = `${revisionLabel(stored)} · ${formatWhen(stored.storedAt)}` +
+                (marks.length ? ` (${marks.join(", ")})` : "");
+            return option;
+        }));
+        select.value = revision(picked) ? picked : fallback;
+        select.dataset.default = fallback;
+        select.dataset.signature = signature;
+        select.dataset.postId = publication.postId;
+    }
+
+    els.publicationRollback.textContent = publication.published ? "Roll back to this revision" : "Put back on the site";
+    els.publicationRollback.disabled = !select.value || select.value === publication.revisionId;
+    els.publicationUnpublish.hidden = !publication.published;
+}
+
+/**
+ * Keep checking what the site shows while something is on its way.
+ *
+ * Resumes after a reload: whatever is still unsettled when the editor opens is
+ * watched again. A site that could not be read is retried only after a change
+ * the author made, and never where there is no site to ask.
+ */
+function watchSite({ restart = false } = {}) {
+    const watch = state.watch;
+    clearTimeout(watch.timer);
+    if (restart) Object.assign(watch, { startedAt: Date.now(), delay: WATCH_FIRST_MS, gaveUp: false });
+
+    const unsettled = state.publications.some((p) => UNSETTLED.has(p.site?.state)) ||
+        Boolean(watch.startedAt && state.site && !state.site.ok && state.site.checkable);
+    if (!unsettled) {
+        watch.startedAt = null;
+        renderPanel();
+        return;
+    }
+    watch.startedAt ??= Date.now();
+    watch.delay ||= WATCH_FIRST_MS;
+    if (Date.now() - watch.startedAt > WATCH_GIVE_UP_MS) {
+        watch.gaveUp = true;
+        renderPanel();
+        return;
+    }
+    watch.timer = setTimeout(async () => {
+        try {
+            await refreshPublications();
+        } catch (err) {
+            if (err.message === "unauthenticated") return;
+            // A failed check is not a change; try again on the next tick.
+        }
+        watch.delay = Math.min(watch.delay * 2, WATCH_MAX_MS);
+        watchSite();
+    }, watch.delay);
+}
+
+/** Say what a change did to the site, including a rebuild that did not start. */
+function reportChange(data) {
+    setError(data.hookError ? `${data.hookError}. Use Rebuild site to try again.` : "");
+}
+
+async function unpublishShown() {
+    const publication = shownPublication();
+    if (!publication?.published) return;
+    if (!confirm(`Take ${nameOf(publication)} off the site? /${publication.slug}/ stops showing it after the rebuild. ` +
+        "Its revisions are kept, so it can be put back.")) return;
+    const { data } = await api("/api/publish/", {
+        method: "POST", body: { action: "unpublish", postId: publication.postId },
+    });
+    reportChange(data);
+    await refreshPublications();
+    watchSite({ restart: true });
+}
+
+async function rollbackShown() {
+    const publication = shownPublication();
+    const chosen = publication?.revisions.find((r) => r.revisionId === els.publicationRevision.value);
+    if (!chosen) return;
+    const verb = publication.published ? "Roll back" : "Put back";
+    if (!confirm(`${verb} ${nameOf(publication)} to ${revisionLabel(chosen)}, stored ${formatWhen(chosen.storedAt)}? ` +
+        `The site rebuilds to show it at /${publication.slug}/.`)) return;
+    const { data } = await api("/api/publish/", {
+        method: "POST", body: { action: "rollback", postId: publication.postId, revisionId: chosen.revisionId },
+    });
+    reportChange(data);
+    await refreshPublications();
+    watchSite({ restart: true });
+}
+
+async function rebuildSite() {
+    els.publicationRebuild.disabled = true;
+    setTimeout(() => { els.publicationRebuild.disabled = false; }, REBUILD_PAUSE_MS);
+    const { data } = await api("/api/publish/", { method: "POST", body: { action: "rebuild" } });
+    setError(data.triggered ? "" : `The rebuild could not be triggered: ${data.error}`);
+    await refreshPublications();
+    watchSite({ restart: true });
+}
+
 // ---------------------------------------------------------------- events
 
 els.save.addEventListener("click", guard(() => save()));
@@ -520,18 +764,13 @@ els.publish.addEventListener("click", guard(async () => {
             method: "POST", body: { postId: state.postId },
         });
         setStatus(`published · v${state.version}`);
-
-        const link = document.createElement("a");
-        link.href = data.url;
-        link.textContent = data.url;
-        els.publishedNote.replaceChildren(
-            document.createTextNode(
-                data.job?.hookError
-                    ? "Published, but the rebuild was not triggered. It will appear on the next build: "
-                    : "Published. The site is rebuilding; it will appear shortly at "
-            ),
-            link
-        );
+        // Published is not live: the panel below says when the site shows it.
+        els.publishedNote.textContent = data.job?.hookError
+            ? "Published, but the rebuild was not triggered. Use Rebuild site to try again."
+            : "Published. The site is rebuilding.";
+        state.selected = null;
+        await refreshPublications();
+        watchSite({ restart: true });
     } finally {
         els.publish.disabled = false;
     }
@@ -542,7 +781,9 @@ els.discard.addEventListener("click", guard(async () => {
     if (!state.postId) return newPost();
     if (!confirm("Delete this draft and all its revisions? This cannot be undone.")) return;
     await api(`/api/drafts/${state.postId}/`, { method: "DELETE" });
+    state.saved = null; // the text on screen belonged to the draft just deleted
     await newPost();
+    await refreshPublications();
 }));
 
 // A local escape hatch that never depends on the network or the session.
@@ -600,6 +841,11 @@ for (const id of FIELDS) {
 }
 
 els.previewToggle.addEventListener("click", () => setPreviewOpen(!state.preview.open));
+
+els.publicationRevision.addEventListener("change", () => renderPanel());
+els.publicationRollback.addEventListener("click", guard(rollbackShown));
+els.publicationRebuild.addEventListener("click", guard(rebuildSite));
+els.publicationUnpublish.addEventListener("click", guard(unpublishShown));
 
 els.attach.addEventListener("click", () => els.attachInput.click());
 
@@ -660,5 +906,11 @@ window.addEventListener("beforeunload", (event) => {
   } catch (err) {
     setStatus("failed", "error");
     setError(`Could not start the editor: ${err.message}`);
+    return;
   }
+  // Separately, so a site that cannot be checked never stops the editor opening.
+  await guard(async () => {
+    await refreshPublications();
+    watchSite();
+  })();
 })();

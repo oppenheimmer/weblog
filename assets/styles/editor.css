@@ -225,6 +225,34 @@
 .conflict-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 12px; }
 .conflict-note { font-size: 0.85rem; color: #5d7183; margin: 0; }
 
+/* ---- On the site --------------------------------------------------------- */
+
+.sidebar-section { margin-top: 22px; }
+
+.publication {
+    margin: 4px 0 18px;
+    padding: 14px 16px;
+    border: 1px solid rgba(18, 52, 77, 0.14);
+    border-radius: 10px;
+}
+.publication-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.publication-title { margin: 0; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: #5d7183; }
+.publication-summary { margin: 8px 0 12px; font-size: 0.9rem; color: #3d5567; overflow-wrap: anywhere; }
+.publication-summary a { color: inherit; }
+.publication-actions { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.publication-actions .field { margin: 0; flex: 1 1 16rem; }
+
+.site-chip {
+    font-size: 0.75rem; font-weight: 600; white-space: nowrap;
+    border-radius: 999px; padding: 2px 9px;
+    background: rgba(18, 52, 77, 0.08); color: #3d5567;
+}
+.site-chip[data-state="live"] { background: rgba(30, 107, 58, 0.12); color: #1e6b3a; }
+.site-chip[data-state="pending"],
+.site-chip[data-state="updating"],
+.site-chip[data-state="removing"] { background: rgba(176, 122, 0, 0.12); color: #6b4a00; }
+.site-chip[data-state="unknown"] { background: rgba(179, 38, 30, 0.08); color: #8c1d18; }
+
 /* ---- Narrow screens ------------------------------------------------------ */
 
 @media (max-width: 860px) {

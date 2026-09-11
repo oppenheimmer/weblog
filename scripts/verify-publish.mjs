@@ -107,11 +107,34 @@ await check("editing and republishing replaces rather than duplicates", async ()
 });
 
 await check("unpublishing removes it but keeps the revision", async () => {
-  await publisher.unpublish("probe-post");
+  await publisher.unpublish(published.postId);
   const posts = await loadPublishedPosts({ store });
   assert(posts.length === 0, "still published");
   const keys = await store.listAll("published/posts/");
   assert(keys.length > 0, "revisions were destroyed, so rollback is impossible");
+});
+
+await check("the publications list reads it back: off the site, both revisions stored, newest first", async () => {
+  const listed = (await publisher.listPublications()).find((p) => p.postId === published.postId);
+  assert(listed && listed.published === false, "the unpublished post is missing, or still marked published");
+  assert(listed.revisions.length === 2, `expected 2 stored revisions, got ${listed.revisions.length}`);
+  assert(listed.revisions[0].revisionId > listed.revisions[1].revisionId, "revisions are not newest first");
+  assert(listed.revisions.every((r) => !Number.isNaN(Date.parse(r.storedAt))), "a stored time did not come back");
+});
+
+await check("it is put back, then rolled back to its first revision, and each is what builds", async () => {
+  const listed = (await publisher.listPublications()).find((p) => p.postId === published.postId);
+  const [newest, oldest] = listed.revisions.map((r) => r.revisionId);
+
+  const back = await publisher.rollback(published.postId, newest);
+  assert(back.changed && back.slug === "probe-post", `putting it back changed nothing: ${JSON.stringify(back)}`);
+  let posts = await loadPublishedPosts({ store });
+  assert(posts.length === 1 && /Revised body\./.test(posts[0].html), "the revision put back is not what builds");
+
+  const older = await publisher.rollback(published.postId, oldest);
+  assert(older.changed, "rolling back changed nothing");
+  posts = await loadPublishedPosts({ store });
+  assert(/Body with inline math/.test(posts[0].html), "the first revision is not what builds after rolling back");
 });
 
 await check("the inventory tree describes what is actually in the bucket", async () => {

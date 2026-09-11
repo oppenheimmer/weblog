@@ -45,6 +45,32 @@ sandboxed frame. It reports what publishing would refuse as errors, and what
 would not render as written, such as a broken formula or an unsupported LaTeX
 command, as warnings. Warnings never block publishing.
 
+**On the site** shows what readers actually see of a published post. It is read
+back from the build manifest the site is serving, never assumed from a publish
+having succeeded:
+
+| State        | Meaning                                                  |
+| ------------ | -------------------------------------------------------- |
+| Live         | The site shows the revision last published               |
+| Not live yet | Published in R2; the rebuild has not landed              |
+| Updating     | The site still shows an earlier revision                 |
+| Coming down  | Unpublished; the site shows it until the rebuild lands   |
+| Unpublished  | Off the site; its revisions are kept for 90 days         |
+| Not checked  | The site could not be read, and the panel says why       |
+
+After each change the editor keeps checking, and says so if nothing has landed
+after 15 minutes, which usually means the build failed. From the same panel:
+
+- **Unpublish** takes a post off the site. Its revisions stay, so it can come back.
+- **Roll back** puts a stored revision back on the site; for an unpublished post
+  the same button reads **Put back**.
+- **Rebuild site** fires the deploy hook again without changing anything.
+
+A published post keeps its slug: publishing it under another is refused until
+it is unpublished. Discarding a draft is refused while its post is published,
+because the draft and the published copy live under the same post id. Every
+post on the site is listed, including one with no draft.
+
 ### Markdown body
 
 Markdown via `markdown-it`, with linkify and typographic quotes:
@@ -246,6 +272,7 @@ not `chromium-browser`:
 ```bash
 node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
+node scripts/verify-editor.mjs           # the On the site panel, against a stand-in site
 ```
 
 Scripts that touch the live R2 bucket need credentials and are run by hand.
@@ -254,7 +281,7 @@ Each works under a throwaway prefix and cleans up after itself:
 ```bash
 node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
 node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
-node --env-file=.env scripts/verify-publish.mjs  # publish and build from R2
+node --env-file=.env scripts/verify-publish.mjs  # publish, unpublish, roll back, build
 node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
 ```
 
@@ -488,6 +515,23 @@ to opt in.
 - A stale save returns **409 carrying the current draft and its ETag**, so the
   editor can show what changed rather than reporting that work vanished. Saving
   with no ETag is 428, never a silent clobber.
+- Everything that changes what the site shows goes through `/api/publish/`:
+  publish, unpublish, roll back, rebuild. One function, since every function
+  counts against Vercel's per-deployment limit. Each change is one conditional
+  update of the published index, then the deploy hook. An index write that loses
+  a race is re-read and decided again, so a concurrent change is neither reported
+  as a failure nor undone.
+- Publishing is idempotent only while the index still names the revision. A
+  publish interrupted before its commit point resumes once a ten-minute lease has
+  passed; one whose hook failed fires only the hook; one rolled back or
+  unpublished since is published again rather than answered with its old job.
+- Live status is read from `/build-manifest.json` on the public site, fetched
+  with `no-store` and a random query parameter, and matched on post id, revision
+  and slug. No Vercel token is needed. A site that cannot be read is reported as
+  not checked, never as a site with nothing on it.
+- Calling the deploy hook again while a build of the same commit is running
+  cancels the earlier build, which is what collapses a burst of publishes into
+  one deployment.
 
 *Deployment findings worth keeping:*
 
@@ -531,6 +575,13 @@ preview, conditional saves, Ctrl/Cmd-S, and a `beforeunload` guard.
 - A 401 mid-session does **not** clear the editor. It says the session ended
   and points at Export, which writes the current text to a local file and
   depends on neither the network nor the session.
+- A 409 is an error unless the caller resolves conflicts itself, and only a
+  draft save does. While every 409 came back as a success, a publish refused for
+  its address reported itself as published.
+- **On the site** checks again after every change: after 4 seconds, then less
+  often, up to every 30 seconds. After 15 minutes it stops and says the build
+  may have failed. Whatever is still on its way when the editor opens is watched
+  again, so a reload loses nothing.
 
 *Bug worth remembering:* accepting HEAD wherever GET is allowed, but passing it
 through unchanged, meant `HEAD /api/drafts/` reached the create branch.
@@ -596,9 +647,12 @@ Four further guards:
 | Dry by default, bounded per run | The failure mode is losing work, not wasting bytes |
 
 Retention: superseded published revisions 90 days (the rollback window), draft
-history 30 days or 20 revisions per post, unattached uploads 24 hours.
+history 30 days or 20 revisions per post, unattached uploads 24 hours. A post
+unpublished without a draft is referenced by nothing, yet keeps every object
+while any of its published revisions is inside the rollback window, so it can
+still be put back.
 
-It runs automatically after publish, unpublish, and draft discard, and never
+It runs automatically after publish, unpublish, rollback, and draft discard, and never
 throws: a publish that succeeded must not be reported as failed because
 housekeeping afterwards did not. Every draft save writes an immutable revision,
 so without a sweep, saving alone would grow the bucket forever.
