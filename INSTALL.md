@@ -1,13 +1,9 @@
 # Installing, building, and deploying the blog
 
 This guide covers everything operational: local setup, the build pipeline,
-publishing on **Vercel**, pointing `blog.souravmishra.net` at it, and
+publishing on **Vercel**, pointing a domain at it, and
 troubleshooting. For the authoring contract (frontmatter, Markdown/LaTeX,
 images, embeds) see [README.md](README.md).
-
-> One repo ↔ one Vercel project. This is its own project, independent of the main
-> `souravmishra.net` site. Pushing to the repo triggers an automatic rebuild and
-> deploy — that is the "publish on push" behavior.
 
 ---
 
@@ -92,7 +88,7 @@ is safe. No extra dashboard config is needed.
 
 ---
 
-## 3. Point `blog.souravmishra.net` at the project
+## 3. Point domain at the project
 
 1. In the Vercel project, open **Settings → Domains**.
 2. Add the domain: `blog.souravmishra.net`.
