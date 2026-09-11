@@ -163,6 +163,32 @@
 .editor-published { margin: 0; color: #1e6b3a; font-size: 0.9rem; flex: 1 1 100%; }
 .editor-published a { color: inherit; }
 
+/* ---- Attachments --------------------------------------------------------- */
+
+.attachments {
+    margin: 4px 0 18px;
+    padding: 14px 16px;
+    border: 1px dashed rgba(18, 52, 77, 0.22);
+    border-radius: 10px;
+}
+.attachments-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.attachments-title { margin: 0; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; color: #5d7183; }
+.attachments-hint { margin: 8px 0 0; font-size: 0.82rem; color: #8395a4; }
+.attachment-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.attachment {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 10px; background: rgba(18, 52, 77, 0.04); border-radius: 8px;
+}
+.attachment-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem; font-weight: 600; overflow-wrap: anywhere;
+}
+.attachment-meta { flex: 1 1 auto; font-size: 0.8rem; color: #5d7183; }
+.attachment-actions { display: flex; gap: 6px; }
+.attach-status { margin: 8px 0 0; font-size: 0.85rem; color: #5d7183; min-height: 1.2em; }
+.button-small { padding: 4px 10px; font-size: 0.82rem; }
+.field-body textarea.drop-target { outline: 2px dashed #12344d; outline-offset: 2px; }
+
 /* ---- Conflict dialog ----------------------------------------------------- */
 
 .conflict {

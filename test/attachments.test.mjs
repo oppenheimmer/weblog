@@ -305,3 +305,17 @@ test("a valid manifest passes", () => {
   assert.deepEqual(validateAttachments(manifest), manifest);
   assert.deepEqual(validateAttachments([]), []);
 });
+
+test("images and snippets reached through a snippet are reported as used", () => {
+  // Publishing copies exactly what is reported here. Missing an image that only
+  // a snippet mentions would publish a page pointing at a file never copied.
+  const inner = "a_00000000000000e9";
+  const { used } = resolve(`::tex[${SNIPPET}]`, {
+    attachments: [...manifest, snippet(inner)],
+    snippets: new Map([
+      [SNIPPET, `\\input{attachments/${inner}.tex}\n\\includegraphics{attachments/${A}.png}`],
+      [inner, "leaf"],
+    ]),
+  });
+  assert.deepEqual([...used].sort(), [A, SNIPPET, inner].sort());
+});

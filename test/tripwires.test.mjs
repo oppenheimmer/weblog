@@ -271,3 +271,18 @@ test("tripwire: the post listing exposes a well-formed table to assistive tech",
     cleanup(dist);
   }
 });
+
+test("tripwire: published uploads are never served as immutable", () => {
+  // §3.3 chose human-readable names over content hashes, and the price is that
+  // a URL cannot be cached forever. An `immutable` rule copied from the fonts
+  // entry would pin a stale image in readers' browsers for a year.
+  const config = JSON.parse(fs.readFileSync(path.join(ROOT, "vercel.json"), "utf8"));
+  const sample = "/images/uploads/a-post/diagram.png";
+  const matching = (config.headers ?? []).filter((rule) =>
+    new RegExp(`^${rule.source.replace(/\(\.\*\)/g, ".*")}$`).test(sample));
+
+  assert.ok(matching.length > 0, "no header rule covers /images/uploads/");
+  const values = matching.flatMap((rule) => rule.headers.map((h) => `${h.key}: ${h.value}`));
+  assert.ok(!values.some((v) => /immutable/i.test(v)), `uploads are cached as immutable:\n  ${values.join("\n  ")}`);
+  assert.ok(values.some((v) => /must-revalidate/i.test(v)), "uploads are not revalidated");
+});

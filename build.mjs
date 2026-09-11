@@ -80,12 +80,41 @@ async function readPosts() {
   return loadPosts();
 }
 
+/**
+ * Fetch and verify every image the published posts show (CLAUDE.md §3.3).
+ *
+ * Only posts from R2 carry media, so a filesystem build never needs a store.
+ * The cache lives under node_modules/ because Vercel keeps that directory
+ * between builds, which is what stops clean-build cost growing with every post.
+ */
+async function syncMedia(posts) {
+  if (!posts.some((post) => post.media?.length)) return;
+  const [{ createStore }, { syncPublishedMedia }] = await Promise.all([
+    import("./lib/server/r2.mjs"),
+    import("./lib/server/media-sync.mjs"),
+  ]);
+  const stats = await syncPublishedMedia({
+    store: createStore(),
+    posts,
+    distDir: DIST,
+    cacheDir: path.join(ROOT, "node_modules", ".cache", "weblog-media"),
+  });
+  console.log(
+    `  media: ${stats.files} file(s), ${stats.downloaded} downloaded, ${stats.cached} from cache, ` +
+    `${(stats.bytes / 1024).toFixed(1)} KB in ${stats.ms} ms`
+  );
+}
+
 async function build() {
+  const started = Date.now();
   console.log("Building blog...");
   rmrf(DIST);
   fs.mkdirSync(DIST, { recursive: true });
 
   const posts = await readPosts();
+  // Before any page is written: a missing or corrupt image stops the build
+  // here, rather than after half a site has been emitted.
+  await syncMedia(posts);
 
   // Per-post pages -> /<slug>/index.html (pretty URLs)
   for (const post of posts) {
@@ -144,7 +173,8 @@ async function build() {
   write("styles/katex.min.css", fs.readFileSync(katexCss));
   copyInto(path.join(KATEX_DIST, "fonts"), "styles/fonts");
 
-  console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, DIST)}/`);
+  // Duration on every build, so the growth §3.3 warns about is visible before it bites.
+  console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, DIST)}/ in ${Date.now() - started} ms`);
 }
 
 try {
@@ -152,6 +182,10 @@ try {
 } catch (err) {
   if (err instanceof ContentError) {
     console.error(`\nContent error: ${err.message}\n`);
+    process.exit(1);
+  }
+  if (err?.name === "MediaSyncError") {
+    console.error(`\nMedia error: ${err.message}\n`);
     process.exit(1);
   }
   throw err;

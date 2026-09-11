@@ -354,3 +354,73 @@ test("ownedPrefixes covers every place a post can have objects", () => {
     assert.ok(prefixes.some((p) => key.startsWith(p)), `${key} is not under any owned prefix`);
   }
 });
+
+// ---------------------------------------------------------------- attachments
+//
+// Attachments added three key kinds under attachments/<postId>/. They must be
+// owned like everything else, or post deletion refuses to run (it rejects any
+// key it cannot attribute) and the sweep can never reclaim them.
+
+import nodeFs from "node:fs";
+import nodePath from "node:path";
+import { fileURLToPath as toFilePath } from "node:url";
+import { createUploads } from "../lib/server/uploads.mjs";
+
+const ATTACH_PNG = nodeFs.readFileSync(
+  nodePath.join(nodePath.dirname(toFilePath(import.meta.url)), "fixtures", "media", "sample-7x11.png")
+);
+
+async function attachTo(store, postId, name = "diagram.png") {
+  const uploads = createUploads(store, { signPut: async (key) => `https://signed.test/${key}` });
+  const signed = await uploads.sign({ postId, name, size: ATTACH_PNG.length, type: "image/png" });
+  await store.put(keys.upload(postId, signed.uploadId, "file"), ATTACH_PNG);
+  return uploads.complete({ postId, uploadId: signed.uploadId });
+}
+
+test("deleting a post removes its attachments and cannot touch another post's", async () => {
+  const { store, client, drafts } = harness();
+  const { draft: first } = await drafts.create({ title: "First" });
+  const { draft: second } = await drafts.create({ title: "Second" });
+  await attachTo(store, first.postId);
+  await attachTo(store, second.postId);
+
+  const ownedBy = (postId) => [...client.objects.keys()].filter((k) => k.includes(`/attachments/${postId}/`));
+  const before = ownedBy(second.postId).sort();
+  assert.ok(before.length >= 3, "expected a record, a file and a name claim");
+
+  await deletePostObjects(store, first.postId, { apply: true });
+  assert.deepEqual(ownedBy(first.postId), [], "the deleted post's attachments survived");
+  assert.deepEqual(ownedBy(second.postId).sort(), before, "deleting one post disturbed another's attachments");
+});
+
+test("an orphaned post's attachments are collectable, a live post's are not", async () => {
+  const { store, client, drafts } = harness();
+  const { draft: live } = await drafts.create({ title: "Live" });
+  const { draft: gone } = await drafts.create({ title: "Gone" });
+  await attachTo(store, live.postId);
+  await attachTo(store, gone.postId);
+  await store.delete(keys.draftPointer(gone.postId)); // nothing references it any more
+  backdate(client, "", 400 * DAY);
+
+  const tree = await buildInventory(store);
+  const liveRecord = tree.posts.find((p) => p.postId === live.postId);
+  const goneRecord = tree.posts.find((p) => p.postId === gone.postId);
+  assert.ok(liveRecord.attachments.length >= 3);
+
+  assert.ok(!collectableForPost(liveRecord).some((d) => d.key.startsWith("attachments/")),
+    "a live post's attachment was marked collectable");
+  const doomed = collectableForPost(goneRecord).map((d) => d.key);
+  assert.ok(doomed.some((k) => k.startsWith(`attachments/${gone.postId}/files/`)), "an orphan's file was kept");
+});
+
+test("ownedPrefixes covers attachment keys too", () => {
+  const prefixes = ownedPrefixes(A);
+  for (const key of [
+    keys.attachmentRecord(A, "a_00000000000000a1"),
+    keys.attachmentBlob(A, "diagram.png"),
+    keys.attachmentName(A, "diagram.png"),
+    keys.uploadIntent(A, "u_00000000000000a1"),
+  ]) {
+    assert.ok(prefixes.some((p) => key.startsWith(p)), `${key} is not under any owned prefix`);
+  }
+});

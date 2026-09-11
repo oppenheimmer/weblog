@@ -1,7 +1,8 @@
 // The editor client (CLAUDE.md Step 5, Slice 1).
 //
-// Deliberately small and dependency-free: a textarea, metadata fields, and
-// conditional saves. Preview and attachments arrive in later slices.
+// Deliberately small and dependency-free: a textarea, metadata fields,
+// conditional saves, and attachments uploaded straight to storage. Preview
+// arrives in a later slice.
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -13,6 +14,8 @@ const els = {
     publish: $("publish"), publishedNote: $("editor-published"),
     conflict: $("conflict"), conflictKeep: $("conflict-keep"), conflictTheirs: $("conflict-theirs"),
     conflictDetail: $("conflict-detail"), conflictNote: $("conflict-note"),
+    attach: $("attach"), attachInput: $("attach-input"),
+    attachmentList: $("attachment-list"), attachStatus: $("attach-status"),
 };
 
 const state = {
@@ -25,6 +28,7 @@ const state = {
     version: null,
     conflict: null,
     saving: false,
+    attachments: [],
 };
 
 const FIELDS = ["title", "date", "format", "slug", "description", "tags", "body"];
@@ -153,6 +157,7 @@ async function openDraft(postId) {
     state.version = data.draft.version;
     writeForm(data.draft);
     state.saved = readForm();
+    await loadAttachments();
     setStatus(`saved · v${data.draft.version}`);
     setError("");
     await refreshList();
@@ -165,6 +170,7 @@ async function newPost() {
     state.version = null;
     writeForm({ date: new Date().toISOString().slice(0, 10) });
     state.saved = readForm();
+    await loadAttachments();
     setStatus("not saved");
     setError("");
     await refreshList();
@@ -244,6 +250,160 @@ async function save({ force = false } = {}) {
         state.saving = false;
         els.save.disabled = false;
     }
+}
+
+// ---------------------------------------------------------------- attachments
+
+const IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
+const setAttachStatus = (text) => { els.attachStatus.textContent = text; };
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** "architecture-diagram.png" -> "architecture diagram", a starting point the author edits. */
+function altFromName(name) {
+    return String(name || "image").replace(/\.[^.]*$/, "").replace(/[-_]+/g, " ").trim() || "image";
+}
+
+/** The reference to type into the body, in whichever format the post is written. */
+function referenceFor(attachment) {
+    const latex = els.format.value === "latex";
+    if (attachment.kind === "tex") {
+        return latex ? `\\input{attachments/${attachment.id}.tex}` : `\n::tex[${attachment.id}]\n`;
+    }
+    const ext = attachment.publicName.split(".").pop();
+    return latex
+        ? `\\includegraphics{attachments/${attachment.id}.${ext}}`
+        : `![${altFromName(attachment.originalName || attachment.publicName)}](attachment://${attachment.id})`;
+}
+
+function insertAtCursor(text) {
+    const area = els.body;
+    const start = area.selectionStart ?? area.value.length;
+    const end = area.selectionEnd ?? start;
+    area.setRangeText(text, start, end, "end");
+    // Through the normal input path, so dirty-tracking notices the change.
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function loadAttachments() {
+    state.attachments = [];
+    if (state.postId) {
+        const { data } = await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}`);
+        state.attachments = data.attachments ?? [];
+    }
+    renderAttachments();
+}
+
+function renderAttachments() {
+    els.attachmentList.replaceChildren();
+    for (const attachment of state.attachments) {
+        const li = document.createElement("li");
+        li.className = "attachment";
+
+        const name = document.createElement("span");
+        name.className = "attachment-name";
+        name.textContent = attachment.publicName;
+
+        const meta = document.createElement("span");
+        meta.className = "attachment-meta";
+        meta.textContent = [
+            attachment.kind === "tex" ? "TeX snippet" : attachment.mediaType.replace("image/", "").toUpperCase(),
+            attachment.width ? `${attachment.width}×${attachment.height}` : null,
+            formatBytes(attachment.bytes),
+        ].filter(Boolean).join(" · ");
+
+        const actions = document.createElement("span");
+        actions.className = "attachment-actions";
+
+        const insert = document.createElement("button");
+        insert.type = "button";
+        insert.className = "button button-secondary button-small";
+        insert.textContent = "Insert";
+        insert.addEventListener("click", () => { insertAtCursor(referenceFor(attachment)); els.body.focus(); });
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "button button-danger button-small";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", guard(() => removeAttachment(attachment)));
+
+        actions.append(insert, remove);
+        li.append(name, meta, actions);
+        els.attachmentList.append(li);
+    }
+}
+
+/**
+ * Sign, transfer, verify.
+ *
+ * The bytes go straight to storage on a short-lived URL and never through the
+ * server, which caps a request at 4.5 MB. The server then reads what arrived
+ * and decides what it is — the type claimed here is only a first filter.
+ */
+async function uploadFile(file) {
+    const isTex = /\.tex$/i.test(file.name || "");
+    const ext = (file.name || "").split(".").pop().toLowerCase();
+    const { data: signed } = await api("/api/uploads/", {
+        method: "POST",
+        body: {
+            action: "sign",
+            postId: state.postId,
+            name: file.name || "pasted-image.png",
+            size: file.size,
+            type: isTex ? "text/x-tex" : (file.type || IMAGE_TYPES[ext] || ""),
+            kind: isTex ? "tex" : "image",
+        },
+    });
+
+    let put;
+    try {
+        put = await fetch(signed.url, { method: signed.method, headers: signed.headers, body: file });
+    } catch {
+        // fetch() rejects without a status when CORS blocks the request, so say
+        // which of the likely causes it is rather than "Failed to fetch".
+        throw new Error("The upload was blocked before it reached storage. " +
+            "The storage bucket may not yet allow uploads from this site (CORS).");
+    }
+    if (!put.ok) throw new Error(`Storage refused the upload (${put.status}).`);
+
+    const { data } = await api("/api/uploads/", {
+        method: "POST", body: { action: "complete", postId: state.postId, uploadId: signed.uploadId },
+    });
+    return data.attachment;
+}
+
+async function attachFiles(files) {
+    // Attachments belong to a saved draft, so a brand-new post is saved first.
+    if (!state.postId) {
+        await save();
+        if (!state.postId) return; // the save failed; its error is already showing
+    }
+    try {
+        for (const file of files) {
+            setAttachStatus(`Uploading ${file.name || "image"}…`);
+            const attachment = await uploadFile(file);
+            state.attachments.push(attachment);
+            renderAttachments();
+            insertAtCursor(referenceFor(attachment));
+        }
+        setAttachStatus(files.length === 1 ? "Attached and inserted." : `Attached ${files.length} files.`);
+    } catch (err) {
+        setAttachStatus("");
+        throw err;
+    }
+}
+
+async function removeAttachment(attachment) {
+    if (!confirm(`Remove ${attachment.publicName} from this draft? Pages already published keep their copy.`)) return;
+    await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}&attachmentId=${encodeURIComponent(attachment.id)}`,
+        { method: "DELETE" });
+    await loadAttachments();
+    setAttachStatus(`Removed ${attachment.publicName}. Delete its reference from the body too, or publishing will stop.`);
 }
 
 // ---------------------------------------------------------------- events
@@ -344,6 +504,38 @@ for (const id of FIELDS) {
         if (isDirty()) setStatus("unsaved");
     });
 }
+
+els.attach.addEventListener("click", () => els.attachInput.click());
+
+els.attachInput.addEventListener("change", guard(async () => {
+    const files = [...els.attachInput.files];
+    els.attachInput.value = ""; // choosing the same file again should fire change again
+    if (files.length) await attachFiles(files);
+}));
+
+// preventDefault runs before the first await, so the browser's own paste and
+// drop never happen alongside the upload.
+els.body.addEventListener("paste", guard(async (event) => {
+    const files = [...(event.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    event.preventDefault();
+    await attachFiles(files);
+}));
+
+els.body.addEventListener("dragover", (event) => {
+    if ([...(event.dataTransfer?.types ?? [])].includes("Files")) {
+        event.preventDefault();
+        els.body.classList.add("drop-target");
+    }
+});
+els.body.addEventListener("dragleave", () => els.body.classList.remove("drop-target"));
+els.body.addEventListener("drop", guard(async (event) => {
+    els.body.classList.remove("drop-target");
+    const files = [...(event.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    event.preventDefault();
+    await attachFiles(files);
+}));
 
 // Ctrl/Cmd-S saves instead of invoking the browser's page-save dialog.
 window.addEventListener("keydown", (event) => {

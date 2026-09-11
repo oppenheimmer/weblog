@@ -207,7 +207,9 @@ test("published posts come back newest first", async () => {
   const { publisher, store } = harness();
   for (const [n, date] of [["older", "2026-01-01"], ["newer", "2026-08-01"]]) {
     await publisher.publish(complete({
-      postId: `p_0000000000000${n === "older" ? "01" : "02"}`,
+      // 16 hex digits, like every real post id — publishing lists the post's
+      // attachments now, and that validates the id the draft store always had.
+      postId: `p_00000000000000${n === "older" ? "01" : "02"}`,
       revisionId: `r_000001_${n}_0001`, slug: n, title: n, date,
     }));
   }

@@ -378,3 +378,59 @@ test("an ordinary code fence is still a code fence", () => {
   assert.match(html, /class="hljs/);
   assert.ok(!/tex-snippet/.test(html));
 });
+
+// ------------------------------------------------------------- remote images
+//
+// Closed with Slice 2. A remote image in a browser-authored post makes every
+// reader's browser call a third party on page load. Links are left alone: a
+// link is followed by choice, an image is fetched on sight.
+
+import { isLocalImageUrl } from "../lib/sanitize.mjs";
+
+test("isLocalImageUrl accepts only root-relative paths on this site", () => {
+  // Not paranoia: browsers read a literal backslash as a slash in http(s) URLs,
+  // so this spelling genuinely leaves the site.
+  assert.equal(new URL("/\\evil.test/p.png", "https://blog.souravmishra.net/").origin, "https://evil.test");
+  for (const good of ["/images/uploads/a-post/diagram.png", "/images/x.webp"]) {
+    assert.equal(isLocalImageUrl(good), true, good);
+  }
+  for (const bad of [
+    "https://evil.test/p.png", "http://evil.test/p.png", "//evil.test/p.png",
+    "/\\evil.test/p.png", "\\\\evil.test\\p.png", "javascript:alert(1)",
+    "data:image/png;base64,AAAA", "relative.png", "", null,
+  ]) {
+    assert.equal(isLocalImageUrl(bad), false, `accepted ${JSON.stringify(bad)}`);
+  }
+});
+
+test("browser-authored markdown never renders an image that loads from another origin", () => {
+  // Judged by resolving each rendered src with the URL parser browsers use.
+  // markdown-it percent-encodes `/\evil.test` to `/%5Cevil.test`, which stays on
+  // this site, so "is there an <img> tag" would be the wrong question.
+  const SITE = "https://blog.souravmishra.net";
+  for (const src of ["https://evil.test/p.png", "HTTPS://evil.test/p.png", "//evil.test/p.png", "/\\evil.test/p.png"]) {
+    const html = mdBrowser.render(`![tracker](${src})`);
+    for (const [, rendered] of html.matchAll(/<img[^>]+src="([^"]*)"/g)) {
+      assert.equal(new URL(rendered, `${SITE}/a-post/`).origin, SITE, `${src} rendered off-site: ${html}`);
+    }
+    assert.match(html, /tracker/, "the alt text was lost");
+  }
+  assert.match(mdBrowser.render("![ok](/images/uploads/a/b.png)"), /<img src="\/images\/uploads\/a\/b\.png" alt="ok"/);
+});
+
+test("browser-authored LaTeX drops a remote includegraphics but keeps a local one", () => {
+  assert.ok(!/<img/.test(renderLatex("\\includegraphics{https://evil.test/p.png}")));
+  assert.match(renderLatex("\\includegraphics{/images/uploads/a/b.png}"), /<img[^>]+src="\/images\/uploads\/a\/b\.png"/);
+});
+
+test("repository-authored posts may still use remote images", () => {
+  assert.match(md.render("![x](https://example.com/a.png)"), /<img src="https:\/\/example\.com\/a\.png"/);
+  assert.match(renderLatex("\\includegraphics{https://example.com/a.png}", { trust: ENGINE }),
+    /<img[^>]+src="https:\/\/example\.com\/a\.png"/);
+});
+
+test("a tex-snippet fence inherits its post's trust for images", () => {
+  const fence = "```tex-snippet\n\\includegraphics{https://evil.test/p.png}\n```";
+  assert.ok(!/<img/.test(mdBrowser.render(fence)), "a browser post's snippet loaded a remote image");
+  assert.match(md.render(fence), /<img/, "a trusted post's snippet lost its image");
+});

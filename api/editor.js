@@ -17,6 +17,7 @@ export default route(async ({ req, res, sessions }) => {
     return res.end();
   }
 
-  for (const [key, value] of Object.entries(pageHeaders())) res.setHeader(key, value);
+  // The editor uploads straight to R2, so its CSP must admit the upload origin.
+  for (const [key, value] of Object.entries(pageHeaders({ uploads: true }))) res.setHeader(key, value);
   return res.status(200).end(editorPage());
 }, { methods: ["GET"], auth: false });
