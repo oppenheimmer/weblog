@@ -335,6 +335,11 @@ try {
     await page.eval(`document.querySelector('[data-view-option="feed"]').focus()`);
     await page.press("Enter");
     await check("Enter on Feed switches from the keyboard", async () => isFeed(await page.eval(VIEW_STATE)));
+    await sleep(1200);
+    await check("articles that loaded inside the hidden feed are revealed once it is shown", async () => {
+      const opacity = await page.eval(`getComputedStyle(document.querySelector(".feed-post")).opacity`);
+      return opacity === "1" || opacity;
+    });
     await check("in feed view, Tab never enters the hidden table", async () => {
       const stops = await tabStops(page);
       return (!stops.includes("table") && stops.includes("feed")) || stops.join(",");
