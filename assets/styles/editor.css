@@ -69,6 +69,9 @@
 .button {
     font: inherit;
     font-weight: 600;
+    /* blog.css sizes buttons for the public site at 10rem. The editor is a
+       dense tool, and that minimum pushed the header off a phone screen. */
+    min-width: 0;
     padding: 9px 16px;
     border-radius: 8px;
     border: 1px solid #12344d;
@@ -163,6 +166,26 @@
 .editor-published { margin: 0; color: #1e6b3a; font-size: 0.9rem; flex: 1 1 100%; }
 .editor-published a { color: inherit; }
 
+/* ---- Preview ------------------------------------------------------------- */
+
+.writing { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 16px; }
+@media (min-width: 1100px) {
+    .writing[data-preview="on"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+}
+.preview-pane { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.preview-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.preview-title { margin: 0; font-size: 0.82rem; font-weight: 600; color: #3d5567; letter-spacing: 0.01em; }
+.preview-state { font-size: 0.8rem; color: #5d7183; }
+.preview-state[data-state="error"] { color: #b3261e; }
+.preview-frame {
+    width: 100%; min-height: 55vh;
+    border: 1px solid rgba(18, 52, 77, 0.18); border-radius: 8px; background: #fff;
+}
+.diagnostics { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.diagnostic { font-size: 0.82rem; padding: 6px 10px; border-radius: 6px; }
+.diagnostic-error { background: rgba(179, 38, 30, 0.08); color: #8c1d18; }
+.diagnostic-warning { background: rgba(176, 122, 0, 0.1); color: #6b4a00; }
+
 /* ---- Attachments --------------------------------------------------------- */
 
 .attachments {
@@ -205,6 +228,7 @@
 /* ---- Narrow screens ------------------------------------------------------ */
 
 @media (max-width: 860px) {
+    .editor-bar-right { flex-wrap: wrap; justify-content: flex-end; }
     .editor-layout { grid-template-columns: minmax(0, 1fr); }
     .editor-sidebar { position: static; }
     .editor-fields { grid-template-columns: minmax(0, 1fr); }

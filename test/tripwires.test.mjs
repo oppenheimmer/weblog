@@ -286,3 +286,17 @@ test("tripwire: published uploads are never served as immutable", () => {
   assert.ok(!values.some((v) => /immutable/i.test(v)), `uploads are cached as immutable:\n  ${values.join("\n  ")}`);
   assert.ok(values.some((v) => /must-revalidate/i.test(v)), "uploads are not revalidated");
 });
+
+test("tripwire: the editor's preview frame is sandboxed with no permissions at all", async () => {
+  // Measured in Chromium (scripts/verify-preview-sandbox.mjs): without this
+  // attribute, a same-origin script placed in the preview runs and reaches the
+  // editor. It is the lock that still holds if the sanitizer ever fails, and a
+  // single allow-* token added for convenience would quietly remove it.
+  const { editorPage } = await import("../lib/server/pages.mjs");
+  const frame = editorPage().match(/<iframe\b[^>]*\bid="preview-frame"[^>]*>/);
+  assert.ok(frame, "the preview frame is missing from the editor");
+  const sandbox = frame[0].match(/\bsandbox="([^"]*)"/);
+  assert.ok(sandbox, "the preview frame has no sandbox attribute");
+  assert.equal(sandbox[1].trim(), "", `the preview frame was granted: ${sandbox[1]}`);
+  assert.match(frame[0], /referrerpolicy="no-referrer"/, "preview requests would leak the editor URL");
+});

@@ -1,8 +1,8 @@
 // The editor client (CLAUDE.md Step 5, Slice 1).
 //
 // Deliberately small and dependency-free: a textarea, metadata fields,
-// conditional saves, and attachments uploaded straight to storage. Preview
-// arrives in a later slice.
+// conditional saves, attachments uploaded straight to storage, and a preview
+// rendered by the server into a sandboxed frame.
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -16,6 +16,8 @@ const els = {
     conflictDetail: $("conflict-detail"), conflictNote: $("conflict-note"),
     attach: $("attach"), attachInput: $("attach-input"),
     attachmentList: $("attachment-list"), attachStatus: $("attach-status"),
+    writing: $("writing"), previewToggle: $("preview-toggle"), previewPane: $("preview-pane"),
+    previewFrame: $("preview-frame"), previewState: $("preview-state"), diagnostics: $("diagnostics"),
 };
 
 const state = {
@@ -29,6 +31,7 @@ const state = {
     conflict: null,
     saving: false,
     attachments: [],
+    preview: { open: false, seq: 0, controller: null, timer: null, refresher: null, lastKey: null },
 };
 
 const FIELDS = ["title", "date", "format", "slug", "description", "tags", "body"];
@@ -63,7 +66,7 @@ function slugify(value) {
 }
 
 /** Every request carries the CSRF token; reads simply ignore it. */
-async function api(path, { method = "GET", body, etag } = {}) {
+async function api(path, { method = "GET", body, etag, signal } = {}) {
     const headers = { "content-type": "application/json" };
     if (state.csrf) headers["x-csrf-token"] = state.csrf;
     if (etag) headers["if-match"] = etag;
@@ -72,6 +75,7 @@ async function api(path, { method = "GET", body, etag } = {}) {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal,
     });
 
     if (res.status === 401) {
@@ -336,6 +340,8 @@ function renderAttachments() {
         li.append(name, meta, actions);
         els.attachmentList.append(li);
     }
+    // The preview shows attachments, so a change to them is a change to it.
+    schedulePreview();
 }
 
 /**
@@ -404,6 +410,93 @@ async function removeAttachment(attachment) {
         { method: "DELETE" });
     await loadAttachments();
     setAttachStatus(`Removed ${attachment.publicName}. Delete its reference from the body too, or publishing will stop.`);
+}
+
+// ---------------------------------------------------------------- preview
+
+const PREVIEW_DEBOUNCE_MS = 500;
+// Signed image URLs in a preview last ten minutes; re-render before they lapse.
+const PREVIEW_REFRESH_MS = 8 * 60 * 1000;
+
+function setPreviewState(text, kind = "") {
+    els.previewState.textContent = text;
+    els.previewState.dataset.state = kind;
+}
+
+function showDiagnostics(list = []) {
+    els.diagnostics.replaceChildren(...list.map((diagnostic) => {
+        const li = document.createElement("li");
+        li.className = `diagnostic diagnostic-${diagnostic.level}`;
+        li.textContent = diagnostic.level === "error"
+            ? `Will not publish: ${diagnostic.message}`
+            : diagnostic.message;
+        return li;
+    }));
+    els.diagnostics.hidden = list.length === 0;
+}
+
+/** Everything a render depends on, so an identical request is not repeated. */
+const previewKey = () => JSON.stringify([readForm(), state.postId, state.attachments.map((a) => a.id)]);
+
+function schedulePreview({ force = false } = {}) {
+    if (!state.preview.open) return;
+    clearTimeout(state.preview.timer);
+    state.preview.timer = setTimeout(() => { refreshPreview({ force }); }, PREVIEW_DEBOUNCE_MS);
+}
+
+/**
+ * Render on the server, show in the sandboxed frame.
+ *
+ * Only the newest request may paint. An older one still in flight is aborted,
+ * and a response that arrives out of order is discarded by sequence number, so
+ * a slow render can never overwrite a newer one.
+ */
+async function refreshPreview({ force = false } = {}) {
+    if (!state.preview.open) return;
+    const key = previewKey();
+    if (!force && key === state.preview.lastKey) return;
+
+    state.preview.controller?.abort();
+    const controller = new AbortController();
+    state.preview.controller = controller;
+    const seq = ++state.preview.seq;
+    setPreviewState("rendering…");
+
+    try {
+        const { data } = await api("/api/preview/", {
+            method: "POST", body: { ...readForm(), postId: state.postId }, signal: controller.signal,
+        });
+        if (seq !== state.preview.seq) return;
+        els.previewFrame.srcdoc = data.html;
+        showDiagnostics(data.diagnostics);
+        state.preview.lastKey = key;
+
+        const errors = data.diagnostics.filter((d) => d.level === "error").length;
+        const warnings = data.diagnostics.length - errors;
+        if (errors) setPreviewState(`${errors} to fix before publishing`, "error");
+        else if (warnings) setPreviewState(`${warnings} warning${warnings === 1 ? "" : "s"}`);
+        else setPreviewState("up to date");
+    } catch (err) {
+        if (err.name === "AbortError" || seq !== state.preview.seq || err.message === "unauthenticated") return;
+        setPreviewState(err.message || "Preview failed.", "error");
+    }
+}
+
+function setPreviewOpen(open) {
+    state.preview.open = open;
+    els.previewPane.hidden = !open;
+    els.writing.dataset.preview = open ? "on" : "off";
+    els.previewToggle.setAttribute("aria-pressed", String(open));
+    els.previewToggle.textContent = open ? "Hide preview" : "Preview";
+    clearInterval(state.preview.refresher);
+    clearTimeout(state.preview.timer);
+    if (open) {
+        state.preview.lastKey = null;
+        refreshPreview();
+        state.preview.refresher = setInterval(() => refreshPreview({ force: true }), PREVIEW_REFRESH_MS);
+    } else {
+        state.preview.controller?.abort();
+    }
 }
 
 // ---------------------------------------------------------------- events
@@ -502,8 +595,11 @@ for (const id of FIELDS) {
     els[id].addEventListener("input", () => {
         if (id === "title" || id === "slug") updateSlugPreview();
         if (isDirty()) setStatus("unsaved");
+        schedulePreview();
     });
 }
+
+els.previewToggle.addEventListener("click", () => setPreviewOpen(!state.preview.open));
 
 els.attach.addEventListener("click", () => els.attachInput.click());
 
