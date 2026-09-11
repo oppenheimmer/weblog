@@ -101,26 +101,78 @@ test("the session endpoint reports absence without leaking anything", async () =
 
 // ---------------------------------------------------------------- login
 
-test("a correct password mints a session cookie and a CSRF token", async () => {
-  const { sessions } = harness();
-  // Low cost: this exercises the route, not scrypt's strength.
-  process.env.ADMIN_PASSWORD_HASH =
-    await hashPassword("a-correct-passphrase", { N: 1024, r: 8, p: 1, keyLength: 32 });
+// Low cost: these exercise the route, not scrypt's strength.
+const PASSPHRASE = "a-correct-passphrase";
+const LOW_COST = { N: 1024, r: 8, p: 1, keyLength: 32 };
+const { deviceCookieName } = await import("../lib/server/http.mjs");
+const cookiesOf = (res) => [].concat(res.getHeader("set-cookie") ?? []);
+const named = (res, name) => cookiesOf(res).find((cookie) => cookie.startsWith(`${name}=`));
+
+const attemptLogin = async ({ password, address = "198.51.100.1", cookie } = {}) => {
   const res = fakeRes();
-  await login(fakeReq({ method: "POST", body: { password: "a-correct-passphrase" } }), res);
+  await login(fakeReq({
+    method: "POST",
+    headers: { "x-vercel-forwarded-for": address, ...(cookie ? { cookie } : {}) },
+    body: { password },
+  }), res);
+  return res;
+};
+
+test("a correct password mints a session cookie, a device cookie and a CSRF token", async () => {
+  const { sessions } = harness();
+  process.env.ADMIN_PASSWORD_HASH = await hashPassword(PASSPHRASE, LOW_COST);
+  const res = await attemptLogin({ password: PASSPHRASE });
 
   assert.equal(res.statusCode, 200);
-  const cookie = res.getHeader("set-cookie");
-  assert.match(cookie, new RegExp(`^${cookieName()}=`));
-  assert.match(cookie, /HttpOnly/);
-  assert.match(cookie, /SameSite=Strict/);
-  assert.match(cookie, /Path=\//);
-  assert.ok(!/Domain=/i.test(cookie), "a Domain attribute would widen the cookie to siblings");
+  const session = named(res, cookieName());
+  const device = named(res, deviceCookieName());
+  for (const cookie of [session, device]) {
+    assert.ok(cookie, `missing a cookie in ${JSON.stringify(cookiesOf(res))}`);
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /SameSite=Strict/);
+    assert.match(cookie, /Path=\//);
+    assert.ok(!/Domain=/i.test(cookie), "a Domain attribute would widen the cookie to siblings");
+  }
   assert.ok(res.json().csrfToken);
 
-  // The cookie value is a real session.
-  const token = cookie.split(";")[0].split("=").slice(1).join("=");
+  // The session cookie's value is a real session.
+  const token = session.split(";")[0].split("=").slice(1).join("=");
   assert.ok(await sessions.verify(token));
+});
+
+test("a browser that signed in before can still sign in while a spray has spent the shared budget", async () => {
+  // Appendix C, F-02: anonymous failures used to refuse every login, the owner's included.
+  const store = createStore({ config: FAKE_CONFIG, client: createFakeS3() });
+  setContext({
+    store,
+    sessions: createSessionStore(store, { authVersion: 1 }),
+    limiter: createRateLimiter(store, { secret: "test-secret", maxGlobal: 3 }),
+  });
+  process.env.ADMIN_PASSWORD_HASH = await hashPassword(PASSPHRASE, LOW_COST);
+
+  const first = await attemptLogin({ password: PASSPHRASE, address: "198.51.100.7" });
+  assert.equal(first.statusCode, 200);
+  const remembered = named(first, deviceCookieName()).split(";")[0];
+
+  for (let i = 0; i < 6; i++) await attemptLogin({ password: "wrong-password-here", address: `203.0.113.${i}` });
+
+  const stranger = await attemptLogin({ password: PASSPHRASE, address: "192.0.2.1" });
+  assert.equal(stranger.statusCode, 429, "precondition: a browser that never signed in is bounded by the shared budget");
+  const forged = await attemptLogin({
+    password: PASSPHRASE, address: "192.0.2.1", cookie: `${deviceCookieName()}=v1.AAAAAAAAAAAAAAAAAAAAAA.forged`,
+  });
+  assert.equal(forged.statusCode, 429, "an unsigned device cookie was honoured");
+
+  const owner = await attemptLogin({ password: PASSPHRASE, address: "192.0.2.1", cookie: remembered });
+  assert.equal(owner.statusCode, 200, "failed attempts from strangers locked the owner out of a browser they use");
+});
+
+test("signing in repeatedly never locks the owner out, because a correct password costs nothing", async () => {
+  harness();
+  process.env.ADMIN_PASSWORD_HASH = await hashPassword(PASSPHRASE, LOW_COST);
+  for (let i = 0; i < 8; i++) {
+    assert.equal((await attemptLogin({ password: PASSPHRASE, address: "1.2.3.4" })).statusCode, 200, `sign-in ${i + 1}`);
+  }
 });
 
 test("a wrong password is refused with the same message as a missing one", async () => {

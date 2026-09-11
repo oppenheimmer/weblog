@@ -452,17 +452,23 @@ by their random suffix.
   there is no second record to keep in sync, and a token lifted from one session
   cannot be replayed against another.
 - **Rate limiting.** Durable in R2, because serverless instances share no memory
-  and an in-memory counter resets on every cold start. Per-client *and* global
-  limits: the first stops guessing at one password, the second stops a spray
-  where no single address trips it. Client addresses come only from
-  platform-set forwarding metadata; a browser-settable `X-Forwarded-For` would
-  let an attacker pick a new identity per attempt. Fails closed if the store is
-  unreadable.
+  and an in-memory counter resets on every cold start. Each attempt is counted
+  by a conditional write *before* the password is checked, so a burst of
+  simultaneous requests cannot all slip under the limit. An address gets five
+  attempts per 15 minutes, and anonymous attempts share a budget that bounds
+  how much password work they can cause. A browser that has signed in before
+  carries a signed device cookie and gets a budget of its own, so failures from
+  anywhere else cannot lock the owner out of it. A correct password gives its
+  attempt back. Client addresses come only from platform-set forwarding
+  metadata; a browser-settable `X-Forwarded-For` would let an attacker pick a
+  new identity per attempt. An attempt that cannot be counted is refused.
 
-Lockout recovery is the 15-minute window expiring on its own. In an emergency,
-changing `ADMIN_PASSWORD_HASH` sets a new password *and* ends every session.
-There is no bypass secret: it would be a second credential of equal power that
-never gets rotated.
+Lockout recovery is the 15-minute window expiring on its own; a browser that
+has signed in before is not affected by other people's failures at all. In an
+emergency, changing `ADMIN_PASSWORD_HASH` sets a new password *and* ends every
+session. There is no bypass secret: it would be a second credential of equal
+power that never gets rotated. The device cookie is not one — it buys a
+separate attempt counter, never a way around the password.
 
 ### Editor API
 

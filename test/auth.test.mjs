@@ -170,57 +170,152 @@ test("a CSRF token validates for its own session only", async () => {
 
 // ---------------------------------------------------------------- rate limit
 
-const limiterOn = (backend, now) =>
-  createRateLimiter(backend, { secret: "test-secret", now });
+const limiterOn = (backend, now, options = {}) =>
+  createRateLimiter(backend, { secret: "test-secret", now, ...options });
 
-test("five failures lock a client out of the sixth attempt", async () => {
-  const backend = newBackend();
-  const limiter = limiterOn(backend, () => 1_000_000);
+/**
+ * A backend whose first `size` reads of rate-limit counters wait for one
+ * another, so every attempt in a burst reads the same count before any of them
+ * writes. That is the interleaving that defeated check-then-record; a fake store
+ * left to itself runs requests one after another and the race never happens.
+ */
+function barrieredBackend(size) {
+  const fake = createFakeS3();
+  const waiting = [];
+  let remaining = size;
+  const client = {
+    objects: fake.objects,
+    async send(command) {
+      if (remaining > 0 && command.constructor.name === "GetObjectCommand" &&
+          String(command.input.Key).includes("rate-limits/")) {
+        remaining--;
+        await new Promise((resolve) => {
+          waiting.push(resolve);
+          if (waiting.length === size) waiting.forEach((release) => release());
+        });
+      }
+      return fake.send(command);
+    },
+  };
+  return createStore({ config: FAKE_CONFIG, client });
+}
+
+test("five attempts from one address are admitted, and the sixth is refused", async () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000);
   for (let i = 0; i < 5; i++) {
-    const result = await limiter.recordFailure("1.2.3.4");
-    assert.equal(result.allowed, true, `attempt ${i + 1} was rejected too early`);
+    assert.equal((await limiter.admit({ client: "1.2.3.4" })).allowed, true, `attempt ${i + 1} was refused too early`);
   }
-  assert.equal((await limiter.recordFailure("1.2.3.4")).allowed, false);
-  assert.equal((await limiter.check("1.2.3.4")).allowed, false);
+  const sixth = await limiter.admit({ client: "1.2.3.4" });
+  assert.equal(sixth.allowed, false);
+  assert.ok(sixth.retryAfterMs > 0, "a refusal did not say how long to wait");
 });
 
-test("the lockout is per client, not global", async () => {
-  const backend = newBackend();
-  const limiter = limiterOn(backend, () => 1_000_000);
-  for (let i = 0; i < 6; i++) await limiter.recordFailure("1.2.3.4");
-  assert.equal((await limiter.check("5.6.7.8")).allowed, true, "an unrelated client was locked out");
+test("a synchronized burst is admitted no further than the limit, because admission is the count", async () => {
+  // Appendix C, F-01: reading the count first let all twelve of these through.
+  const limiter = limiterOn(barrieredBackend(12), () => 1_000_000);
+  const results = await Promise.all(Array.from({ length: 12 }, () => limiter.admit({ client: "1.2.3.4" })));
+  const admitted = results.filter((r) => r.allowed).length;
+  assert.ok(admitted >= 1, "nothing in the burst was admitted at all");
+  assert.ok(admitted <= 5, `${admitted} of 12 simultaneous attempts were admitted past a limit of 5`);
 });
 
-test("a global limit stops a spray where no single client trips the per-client cap", async () => {
-  const backend = newBackend();
-  const limiter = createRateLimiter(backend, {
-    secret: "s", now: () => 1_000_000, maxPerClient: 5, maxGlobal: 12,
-  });
-  for (let i = 0; i < 12; i++) await limiter.recordFailure(`10.0.0.${i}`);
-  const fresh = await limiter.check("10.0.0.200");
-  assert.equal(fresh.allowed, false, "a distributed spray was not caught by the global limit");
+test("the limit is per address: one address's failures do not refuse another", async () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000);
+  for (let i = 0; i < 6; i++) await limiter.admit({ client: "1.2.3.4" });
+  assert.equal((await limiter.admit({ client: "5.6.7.8" })).allowed, true, "an unrelated client was refused");
 });
 
-test("the window rolls, so a lockout expires on its own", async () => {
+test("an address already over its limit spends nothing from the shared budget", async () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000, { maxGlobal: 6 });
+  for (let i = 0; i < 20; i++) await limiter.admit({ client: "1.2.3.4" }); // five admitted, fifteen refused
+  assert.equal((await limiter.admit({ client: "9.9.9.9" })).allowed, true,
+    "one address's refused attempts drained the budget everyone else shares");
+});
+
+test("a shared budget bounds the password work anonymous traffic can cause", async () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000, { maxGlobal: 12 });
+  for (let i = 0; i < 12; i++) {
+    assert.equal((await limiter.admit({ client: `10.0.0.${i}` })).allowed, true);
+  }
+  assert.equal((await limiter.admit({ client: "10.0.0.200" })).allowed, false,
+    "a spray across many addresses was not bounded");
+});
+
+test("a browser that has signed in before cannot be locked out by anyone else's failures", async () => {
+  // Appendix C, F-02: one shared counter used to refuse every client, the owner included.
+  const limiter = limiterOn(newBackend(), () => 1_000_000, { maxGlobal: 3 });
+  const { id } = limiter.deviceCookie();
+  for (let i = 0; i < 10; i++) await limiter.admit({ client: `10.0.0.${i}` });
+  assert.equal((await limiter.admit({ client: "10.0.0.99" })).allowed, false, "precondition: the shared budget is spent");
+  assert.equal((await limiter.admit({ client: "10.0.0.1", device: id })).allowed, true,
+    "a spray locked the owner out of a browser they already use");
+});
+
+test("a known device is still limited on its own", async () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000);
+  const { id } = limiter.deviceCookie();
+  for (let i = 0; i < 5; i++) {
+    assert.equal((await limiter.admit({ client: "1.2.3.4", device: id })).allowed, true);
+  }
+  assert.equal((await limiter.admit({ client: "1.2.3.4", device: id })).allowed, false,
+    "a device cookie bought unlimited guesses");
+});
+
+test("only a device cookie this server signed names a device", () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000);
+  const { id, value } = limiter.deviceCookie();
+  assert.equal(limiter.identifyDevice(value), id);
+
+  const [version, deviceId, mac] = value.split(".");
+  const flipped = mac.slice(0, -1) + (mac.endsWith("A") ? "B" : "A");
+  const elsewhere = createRateLimiter(newBackend(), { secret: "a-different-secret" });
+  for (const forged of [
+    elsewhere.deviceCookie(id).value,
+    `${version}.${deviceId}.${flipped}`,
+    `${version}.${limiter.deviceCookie().id}.${mac}`,
+    `v2.${deviceId}.${mac}`,
+    `${value}.extra`,
+    `v1.${deviceId}.`,
+    "v1..", "garbage", "", null, undefined,
+  ]) {
+    assert.equal(limiter.identifyDevice(forged), null, `accepted a cookie this server did not sign: ${forged}`);
+  }
+});
+
+test("a correct password gives its attempt back, so signing in never locks the owner out", async () => {
+  const limiter = limiterOn(newBackend(), () => 1_000_000);
+  for (let i = 0; i < 20; i++) {
+    const admission = await limiter.admit({ client: "1.2.3.4" });
+    assert.equal(admission.allowed, true, `sign-in ${i + 1} was refused`);
+    await limiter.release(admission);
+  }
+});
+
+test("a refund gives back one attempt, not the failures that came before it", async () => {
+  // An attacker sharing the owner's address (a NAT, a café) must not have their
+  // failed guesses forgiven because the owner then signed in from there.
+  const limiter = limiterOn(newBackend(), () => 1_000_000);
+  for (let i = 0; i < 4; i++) await limiter.admit({ client: "1.2.3.4" }); // four failures, kept
+  await limiter.release(await limiter.admit({ client: "1.2.3.4" }));      // the owner signs in
+  assert.equal((await limiter.admit({ client: "1.2.3.4" })).allowed, true, "the address had one attempt left");
+  assert.equal((await limiter.admit({ client: "1.2.3.4" })).allowed, false,
+    "signing in wiped the address's earlier failures instead of returning one attempt");
+});
+
+test("the window rolls, so a refusal expires on its own", async () => {
   let clock = 1_000_000;
   const limiter = limiterOn(newBackend(), () => clock);
-  for (let i = 0; i < 6; i++) await limiter.recordFailure("1.2.3.4");
-  assert.equal((await limiter.check("1.2.3.4")).allowed, false);
+  for (let i = 0; i < 6; i++) await limiter.admit({ client: "1.2.3.4" });
+  assert.equal((await limiter.admit({ client: "1.2.3.4" })).allowed, false);
 
   clock += 15 * 60 * 1000 + 1;
-  assert.equal((await limiter.check("1.2.3.4")).allowed, true, "the lockout never expired");
-});
-
-test("successful logins consume no budget — only failures count", async () => {
-  const limiter = limiterOn(newBackend(), () => 1_000_000);
-  assert.equal((await limiter.check("1.2.3.4")).allowed, true);
-  assert.equal((await limiter.check("1.2.3.4")).clientCount, 0);
+  assert.equal((await limiter.admit({ client: "1.2.3.4" })).allowed, true, "the refusal never expired");
 });
 
 test("client identifiers are hashed, so no plaintext address is stored", async () => {
   const backend = newBackend();
   const limiter = limiterOn(backend, () => 1_000_000);
-  await limiter.recordFailure("203.0.113.9");
+  await limiter.admit({ client: "203.0.113.9" });
   const keys = await backend.listAll("rate-limits/");
   assert.ok(keys.length > 0);
   for (const { key } of keys) {
@@ -239,25 +334,29 @@ test("the client address is read only from platform metadata, never from the bro
   assert.equal(clientAddress({ "x-forwarded-for": "1.1.1.1" }), null);
 });
 
-test("rate limiting fails closed when storage cannot be read", async () => {
+test("an attempt that cannot be counted is refused, not waved through", async () => {
   const broken = {
     getJson: async () => { throw new Error("R2 unreachable"); },
+    mutateJson: async () => { throw new Error("R2 unreachable"); },
     listAll: async () => [],
   };
   const limiter = createRateLimiter(broken, { secret: "s" });
-  const result = await limiter.check("1.2.3.4");
-  assert.equal(result.allowed, false, "an unreadable rate-limit store allowed the attempt through");
-  assert.equal(result.failedClosed, true);
+  for (const device of [null, limiter.deviceCookie().id]) {
+    const result = await limiter.admit({ client: "1.2.3.4", device });
+    assert.equal(result.allowed, false, "an unwritable rate-limit store let the attempt through");
+    assert.equal(result.failedClosed, true);
+  }
 });
 
 test("sweeping drops elapsed windows and keeps the current one", async () => {
   let clock = 1_000_000;
   const backend = newBackend();
   const limiter = limiterOn(backend, () => clock);
-  await limiter.recordFailure("1.2.3.4");
+  await limiter.admit({ client: "1.2.3.4" });
   clock += 15 * 60 * 1000 * 3;
-  await limiter.recordFailure("1.2.3.4");
+  await limiter.admit({ client: "1.2.3.4" });
 
-  assert.equal(await limiter.sweep(), 2); // the old window's client + global records
-  assert.equal((await limiter.check("1.2.3.4")).clientCount, 1, "the current window was swept away");
+  assert.equal(await limiter.sweep(), 2); // the old window's client and shared records
+  const next = await limiter.admit({ client: "1.2.3.4" });
+  assert.equal(next.charges[0].count, 2, "the current window was swept away");
 });
