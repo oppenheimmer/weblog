@@ -319,6 +319,18 @@ function insertAtCursor(text) {
     area.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+/** Insert a reference on a line of its own, whatever the cursor was next to. */
+function insertOnOwnLine(text) {
+    const area = els.body;
+    const start = area.selectionStart ?? area.value.length;
+    const end = area.selectionEnd ?? start;
+    const before = area.value.slice(0, start);
+    const after = area.value.slice(end);
+    const lead = before === "" || before.endsWith("\n") ? "" : "\n";
+    const trail = after.startsWith("\n") ? "" : "\n";
+    insertAtCursor(`${lead}${text.trim()}${trail}`);
+}
+
 async function loadAttachments() {
     state.attachments = [];
     if (state.postId) {
@@ -420,7 +432,7 @@ async function attachFiles(files) {
             const attachment = await uploadFile(file);
             state.attachments.push(attachment);
             renderAttachments();
-            insertAtCursor(referenceFor(attachment));
+            insertOnOwnLine(referenceFor(attachment));
         }
         setAttachStatus(files.length === 1 ? "Attached and inserted." : `Attached ${files.length} files.`);
     } catch (err) {
