@@ -74,7 +74,8 @@ test("an unparseable date is rejected instead of producing an Invalid Date page"
 });
 
 test("reserved slugs are rejected so posts cannot shadow generated routes", () => {
-  for (const reserved of ["tags", "api", "editor", "login", "404", "images", "downloads"]) {
+  // "page" because listings continue at /page/2/ (lib/listing.mjs).
+  for (const reserved of ["tags", "api", "editor", "login", "404", "images", "downloads", "page"]) {
     assert.ok(RESERVED_SLUGS.has(reserved), `${reserved} should be reserved`);
     const err = catches(
       () => loadPost(basic(`slug: ${reserved}`), { sourceName: "x.md" }),

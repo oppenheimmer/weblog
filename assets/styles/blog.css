@@ -240,52 +240,134 @@ a.chip:hover, a.chip:focus-visible {
 .button-primary { background: var(--brand); color: #ffffff; }
 .button-secondary { background: rgba(255, 255, 255, 0.8); color: var(--brand); border: 1px solid rgba(18, 52, 77, 0.12); }
 
-/* ---- Post list (Notion-style database table) ----------------------------- */
-.post-db-section { padding-top: 2.5rem; }
+/* ---- Listings: feed and table views ------------------------------------- */
+.listing { padding-top: 2.5rem; }
 
-.post-db {
+.listing-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1.5rem;
+    margin-bottom: 1.75rem;
+}
+.listing-heading {
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.tag-header .listing-bar { margin: 1rem 0 0; }
+.tag-header .listing-bar .post-lede { margin-top: 0; }
+
+/* The switch only works with script, so it only appears with script. */
+.view-switch { display: none; }
+.js .view-switch {
+    display: inline-flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+}
+.view-option {
+    padding: 0.45rem 1rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.92rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+.view-option:hover { color: var(--brand); background: rgba(18, 52, 77, 0.06); }
+/* Styled from the root attribute the head script sets, not from aria-pressed,
+   so the right button is lit before blog.js has run. */
+:root:not([data-view="table"]) .view-option[data-view-option="feed"],
+:root[data-view="table"] .view-option[data-view-option="table"] {
+    background: var(--brand);
+    color: #ffffff;
+}
+
+/* One view at a time. display:none takes the other out of the tab order and
+   the accessibility tree, not just out of sight. Without script nothing sets
+   data-view, so the feed shows. */
+.listing-table { display: none; }
+:root[data-view="table"] .listing-table { display: block; }
+:root[data-view="table"] .listing-feed { display: none; }
+
+.listing-feed { display: grid; gap: 1.75rem; }
+/* Grid children otherwise refuse to shrink below wide code blocks and equations. */
+.listing-feed > * { min-width: 0; }
+
+.feed-post {
+    padding: clamp(1.35rem, 3.5vw, 2.5rem);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: 0 14px 35px rgba(18, 52, 77, 0.08);
+}
+.feed-header { margin-bottom: 1.75rem; }
+.feed-title { margin-top: 0.5rem; font-size: clamp(1.6rem, 3.6vw, 2.35rem); line-height: 1.1; }
+.feed-title a:hover { color: var(--accent); }
+.feed-header .chip-row { margin-top: 1rem; }
+.feed-note { margin-top: 1rem; }
+.feed-more { margin-top: 1.25rem; }
+
+.pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+.pager-gap { min-width: 10rem; }
+.pager-status { color: var(--muted); font-weight: 600; }
+
+.post-table-frame {
+    overflow-x: auto;
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     background: rgba(255, 255, 255, 0.78);
     box-shadow: 0 14px 35px rgba(18, 52, 77, 0.08);
-    overflow: hidden;
 }
-
-.db-head, .db-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) auto;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.85rem 1.25rem;
-}
-
-.db-head {
+.post-table { width: 100%; border-collapse: collapse; }
+.post-table th, .post-table td { padding: 0.85rem 1.25rem; text-align: left; vertical-align: middle; }
+.post-table thead th {
     font-size: 0.78rem;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    white-space: nowrap;
     color: var(--muted);
     border-bottom: 1px solid var(--border);
     background: rgba(18, 52, 77, 0.03);
 }
-
-.db-row { border-top: 1px solid var(--border); cursor: pointer; transition: background-color 0.15s ease; }
-.db-row:first-of-type { border-top: 0; }
-.db-row:hover, .db-row:focus-within { background: rgba(18, 52, 77, 0.05); }
-
-.db-title {
+.post-table tbody tr { cursor: pointer; transition: background-color 0.15s ease; }
+.post-table tbody tr + tr { border-top: 1px solid var(--border); }
+.post-table tbody tr:hover, .post-table tbody tr:focus-within { background: rgba(18, 52, 77, 0.05); }
+.post-table-title {
+    min-width: 12rem;
     font-family: "Space Grotesk", sans-serif;
+    font-size: 1.05rem;
     font-weight: 700;
     color: var(--text);
-    font-size: 1.05rem;
 }
-.db-row:hover .db-title { color: var(--accent); }
-
-.db-tags { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0; }
-/* reuse the existing .chip, just smaller inside a row (no new tag class) */
-.db-tags .chip { padding: 0.2rem 0.55rem; font-size: 0.78rem; }
-
-.db-date { color: var(--muted); font-size: 0.9rem; font-weight: 600; white-space: nowrap; }
+.post-table tbody tr:hover .post-table-title { color: var(--accent); }
+.post-table-date { color: var(--muted); font-size: 0.9rem; font-weight: 600; white-space: nowrap; }
+.post-table-tags { min-width: 8rem; }
+/* The existing .chip, smaller inside a row. */
+.post-table-tags .chip {
+    display: inline-block;
+    margin: 0.15rem 0.4rem 0.15rem 0;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.78rem;
+}
+/* Inside a scrolling frame an offset outline would be clipped at the edges. */
+.post-table a:focus-visible { outline-offset: 1px; }
 
 .tag-header { margin-bottom: 1.75rem; }
 .tag-header .eyebrow { margin-bottom: 0.6rem; }
@@ -343,6 +425,9 @@ a.chip:hover, a.chip:focus-visible {
 .prose blockquote p { color: var(--muted); }
 
 .prose img {
+    /* Images may carry width and height to reserve their space; this keeps the
+       shape when max-width scales them down. */
+    height: auto;
     margin: 1.75rem auto;
     border-radius: var(--radius-md);
     box-shadow: 0 14px 35px rgba(18, 52, 77, 0.12);
@@ -467,9 +552,13 @@ a.chip:hover, a.chip:focus-visible {
     .hero-title { font-size: clamp(2.65rem, 12vw, 4rem); }
     .button { width: 100%; }
     .mobile-social { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .db-head { display: none; }
-    .db-row { grid-template-columns: 1fr; gap: 0.35rem; padding: 1rem 1.1rem; }
-    .db-date { font-size: 0.82rem; }
+    .post-table th, .post-table td { padding: 0.75rem 0.7rem; }
+    /* Fit the phone when the words allow it; the frame scrolls when they do not. */
+    .post-table-title { min-width: 7rem; font-size: 1rem; }
+    .post-table-tags { min-width: 0; }
+    .post-table-date { font-size: 0.82rem; }
+    .pager { display: grid; justify-items: stretch; text-align: center; }
+    .pager-gap { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

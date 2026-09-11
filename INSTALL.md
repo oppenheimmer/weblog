@@ -45,9 +45,10 @@ What `npm run build` does (`build.mjs`, single pass):
 3. Renders each body — Markdown via `markdown-it`, LaTeX via `lib/latex.mjs` —
    pre-rendering math with KaTeX so **no client-side math JS is needed**.
 4. Sorts posts newest-first and writes:
-   - `index.html` (the listing table)
+   - `index.html` (the listing: full articles, with a table view of every post),
+     continuing at `page/<n>/index.html` once the articles outweigh one page
    - `<slug>/index.html` per post
-   - `tags/<slug>/index.html` per distinct tag (newest-first within each)
+   - `tags/<slug>/index.html` per distinct tag (newest-first within each, paginated the same way)
    - `feed.xml`, `sitemap.xml` (posts **and** tag pages), `robots.txt`, `404.html`
 5. Copies static assets into `dist/`:
    - `assets/styles/` → `styles/`
@@ -117,8 +118,9 @@ is safe. No extra dashboard config is needed.
 
 Once deployed, check:
 
-- `https://blog.souravmishra.net/` — the post listing renders as a table, styled
-  like the main site (fonts, colors, nav, footer). Rows are clickable.
+- `https://blog.souravmishra.net/` — the listing shows full articles newest-first,
+  styled like the main site (fonts, colors, nav, footer). **Table** switches to a
+  compact table with clickable rows, and the choice survives a reload.
 - Open a post — math, highlighted code, and heading anchors render. **Disable
   JavaScript and reload**: the math is still there (pre-rendered at build).
 - Click a **tag chip** — `/tags/<slug>/` lists only posts with that tag,
@@ -168,5 +170,5 @@ Installed by `npm install`; pinned in `package.json`:
   `@unified-latex/unified-latex-to-hast` — pure-JS LaTeX → HTML pipeline
 
 The only runtime asset shipped to browsers is the small `assets/blog.js`
-(mobile nav, clickable rows, scroll reveal) plus any per-post embeds you add —
+(mobile nav, feed/table switch, clickable rows, scroll reveal) plus any per-post embeds you add —
 there is no framework runtime.

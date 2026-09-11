@@ -9,7 +9,7 @@
   "favicon.svg": "d8b4bf4566a69ea4e441909b19cfd696baf31290e34f37a4751d0074ee8413a9",
   "feed.xml": "9985c5652b355ccc3e54abc428ba31a3fb63aeec512b1925f9ca321289c48e8e",
   "images/diagram.png": "c414cd0e204de974f73753c7e28d7638e7b3691bb8b1a2bab6b25bb7fed7ce77",
-  "index.html": "a69cd9bdce35771d2c20b9e2064fc4c6873e1b16d09d33d377e9cf9449113c34",
+  "index.html": "a355a80e361a54cd63796e3e3ee63afe374ae21db5a1ee1dbf4c92a8b7b45096",
   "latex-note/index.html": "2962ea7813e6ec86f54e4c1854d14a118d43a5b1a3ab12991ccda617a0fe4259",
   "markdown-kitchen-sink/index.html": "c56dd0c03ffc17e90f9a2e810839093651ccf20125f97a25162289627712fb80",
   "robots.txt": "a37a1249ac5969080c1f83d76f69b3f25b6fbf54b0d6834a8c88a94f4fb9cd14",
@@ -78,10 +78,10 @@
   "styles/fonts/KaTeX_Typewriter-Regular.woff": "e14fed02b1aba7ce9f5afd5844b5d0321b22351febc720e0de8b8723527609f7",
   "styles/fonts/KaTeX_Typewriter-Regular.woff2": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b",
   "styles/katex.min.css": "0289a02cf451a44dd73add683a09644252363871ac11713a647b732cee8b1ee3",
-  "tags/latex/index.html": "881961c1185da84818c75792eba9ac34c1494db1c7853864e401392446d041f3",
-  "tags/markdown/index.html": "3b107f2852b2469108accffb47320a06e1b976fc968ee9f47da40f71f67002e8",
-  "tags/meta/index.html": "a78e29dd8e049ee7e0013a0b3384449e77fd7d1cc466cad003fa883991641d44",
-  "tags/testing/index.html": "84c97b8aa44ec43005a7956a37aa9d3d289337f49dd70eeea1f4dfc2fe5daa9f",
+  "tags/latex/index.html": "0473eb02d79f2f578a2951b137a7914a8a7170bc85c9f830a11d66259a0e94ea",
+  "tags/markdown/index.html": "17d51aee945219a96c049c981f848ff01e96b573e5497a6db9cfb259afbfa917",
+  "tags/meta/index.html": "dfd6546e112508f2e8920c6847d69577a62c54a300eb815723d42bcdfc52be86",
+  "tags/testing/index.html": "3be804beca0fed642b47bb47c66df7af274589a2aed065b226ae71c0230bc0f1",
   "untagged/index.html": "73832796b9a57bc2ec682f7008e8778626ba72db7ce605bfe132183d9d878dcb",
   "welcome/index.html": "27886f470584a26a283ce998d65c4735ffbaffd5e64394fe34ce1a684c2d90fb"
 }

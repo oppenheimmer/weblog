@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script>document.documentElement.classList.add("js");</script>
+  <script>(function(){var v=null;try{v=new URLSearchParams(location.search).get("view")}catch(e){}if(v!=="feed"&&v!=="table"){try{v=localStorage.getItem("blog:view")}catch(e){v=null}}if(v==="table")document.documentElement.setAttribute("data-view","table")})();</script>
   <meta name="description" content="Notes on computer vision, limited-data deep learning, LLMs, and applied AI by Sourav Mishra." />
   <meta name="theme-color" content="#12344d" />
   <link rel="canonical" href="https://blog.souravmishra.net/" />
@@ -14,6 +15,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles/blog.css" />
   <link rel="alternate" type="application/rss+xml" title="Sourav Mishra — Blog" href="/feed.xml" />
+  <link rel="stylesheet" href="/styles/katex.min.css" />
 
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Sourav Mishra — Blog" />
@@ -84,51 +86,199 @@
     </header>
   <main id="main-content">
 
-    <section class="section post-db-section" aria-label="Posts">
+    <section class="section listing">
       <div class="shell">
-        <div class="post-db fade-up" role="table" aria-label="Articles">
-          <div class="db-head" role="row">
-            <span role="columnheader">Title</span>
-            <span role="columnheader">Tags</span>
-            <span role="columnheader">Date</span>
+          <div class="listing-bar fade-up">
+            <h1 class="listing-heading">Posts</h1>
+            <div class="view-switch" role="group" aria-label="Show posts as">
+              <button type="button" class="view-option" data-view-option="feed" aria-pressed="true">Feed</button>
+              <button type="button" class="view-option" data-view-option="table" aria-pressed="false">Table</button>
+            </div>
           </div>
-          
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/same-date-alpha/">Same date, alpha</a></span>
-          <div class="db-tags" role="cell" aria-label="Tags"><a class="chip" href="/tags/testing/">testing</a></div>
-          <time class="db-date" role="cell" datetime="2026-07-06T00:00:00.000Z">July 6, 2026</time>
-        </div>
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/same-date-beta/">Same date, beta</a></span>
-          <div class="db-tags" role="cell" aria-label="Tags"><a class="chip" href="/tags/testing/">testing</a></div>
-          <time class="db-date" role="cell" datetime="2026-07-06T00:00:00.000Z">July 6, 2026</time>
-        </div>
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/embeds/">Per-post embed hooks</a></span>
-          <div class="db-tags" role="cell" aria-label="Tags"><a class="chip" href="/tags/testing/">testing</a></div>
-          <time class="db-date" role="cell" datetime="2026-07-05T00:00:00.000Z">July 5, 2026</time>
-        </div>
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/untagged/">A post with no tags</a></span>
-          <span class="db-tags" role="cell"></span>
-          <time class="db-date" role="cell" datetime="2026-07-03T00:00:00.000Z">July 3, 2026</time>
-        </div>
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/latex-note/">A LaTeX-sourced note</a></span>
-          <div class="db-tags" role="cell" aria-label="Tags"><a class="chip" href="/tags/latex/">latex</a><a class="chip" href="/tags/testing/">testing</a></div>
-          <time class="db-date" role="cell" datetime="2026-07-02T00:00:00.000Z">July 2, 2026</time>
-        </div>
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/markdown-kitchen-sink/">Markdown kitchen sink</a></span>
-          <div class="db-tags" role="cell" aria-label="Tags"><a class="chip" href="/tags/markdown/">markdown</a><a class="chip" href="/tags/testing/">testing</a></div>
-          <time class="db-date" role="cell" datetime="2026-07-01T00:00:00.000Z">July 1, 2026</time>
-        </div>
-        <div class="db-row" role="row">
-          <span class="db-title" role="cell"><a href="/welcome/">Setting up</a></span>
-          <div class="db-tags" role="cell" aria-label="Tags"><a class="chip" href="/tags/meta/">meta</a></div>
-          <time class="db-date" role="cell" datetime="2026-06-25T00:00:00.000Z">June 25, 2026</time>
-        </div>
-        </div>
+          <div class="listing-view listing-feed">
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-07-06T00:00:00.000Z">July 6, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/same-date-alpha/">Same date, alpha</a></h2>
+              <div class="chip-row" aria-label="Tags"><a class="chip" href="/tags/testing/">testing</a></div>
+            </header>
+            <div class="prose">
+<p>Alpha body.</p>
+
+            </div>
+          </article>
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-07-06T00:00:00.000Z">July 6, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/same-date-beta/">Same date, beta</a></h2>
+              <div class="chip-row" aria-label="Tags"><a class="chip" href="/tags/testing/">testing</a></div>
+            </header>
+            <div class="prose">
+<p>Beta body.</p>
+
+            </div>
+          </article>
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-07-05T00:00:00.000Z">July 5, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/embeds/">Per-post embed hooks</a></h2>
+              <div class="chip-row" aria-label="Tags"><a class="chip" href="/tags/testing/">testing</a></div>
+            </header>
+            <p class="post-lede">Exercises styles, scripts, head, and distill frontmatter hooks.</p>
+            <p class="feed-note">This post has interactive parts that run only on its own page.</p>
+            <p class="feed-more"><a class="button button-secondary" href="/embeds/">Read the post</a></p>
+          </article>
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-07-03T00:00:00.000Z">July 3, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/untagged/">A post with no tags</a></h2>
+              
+            </header>
+            <div class="prose">
+<p>This post carries no tags at all. It must still appear in the listing and the feed.</p>
+
+            </div>
+          </article>
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-07-02T00:00:00.000Z">July 2, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/latex-note/">A LaTeX-sourced note</a></h2>
+              <div class="chip-row" aria-label="Tags"><a class="chip" href="/tags/latex/">latex</a><a class="chip" href="/tags/testing/">testing</a></div>
+            </header>
+            <div class="prose">
+<h3>Introduction</h3><p>Body text with inline math <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">E = mc^{2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8141em;"></span><span class="mord mathnormal">m</span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span> and display math:</p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msubsup><mo>∫</mo><mn>0</mn><mn>1</mn></msubsup><mi>x</mi><mtext> </mtext><mi>d</mi><mi>x</mi><mo>=</mo><mstyle scriptlevel="0" displaystyle="false"><mfrac><mn>1</mn><mn>2</mn></mfrac></mstyle></mrow><annotation encoding="application/x-tex">\int_{0}^{1} x\,dx = \tfrac12</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:2.476em;vertical-align:-0.9119em;"></span><span class="mop"><span class="mop op-symbol large-op" style="margin-right:0.4445em;position:relative;top:-0.0011em;">∫</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.564em;"><span style="top:-1.7881em;margin-left:-0.4445em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">0</span></span></span></span><span style="top:-3.8129em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.9119em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">d</span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.1901em;vertical-align:-0.345em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8451em;"><span style="top:-2.655em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.394em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.345em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span></span><ul class="itemize"><li><p>A list item.</p></li><li><p>Another list item.</p></li></ul><h3>Second section</h3><p>More prose to give the reading-time estimate something to chew on.</p>
+            </div>
+          </article>
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-07-01T00:00:00.000Z">July 1, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/markdown-kitchen-sink/">Markdown kitchen sink</a></h2>
+              <div class="chip-row" aria-label="Tags"><a class="chip" href="/tags/markdown/">markdown</a><a class="chip" href="/tags/testing/">testing</a></div>
+            </header>
+            <div class="prose">
+<p>Inline math <eq><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">E = mc^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.6833em;"></span><span class="mord mathnormal" style="margin-right:0.0576em;">E</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:0.8141em;"></span><span class="mord mathnormal">m</span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></eq> sits in a sentence, and display math follows:</p>
+<section><eqn><span class="katex-display"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><msubsup><mo>∫</mo><mn>0</mn><mn>1</mn></msubsup><mi>x</mi><mtext> </mtext><mi>d</mi><mi>x</mi><mo>=</mo><mstyle scriptlevel="0" displaystyle="false"><mfrac><mn>1</mn><mn>2</mn></mfrac></mstyle></mrow><annotation encoding="application/x-tex">\int_0^1 x\,dx = \tfrac12</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:2.476em;vertical-align:-0.9119em;"></span><span class="mop"><span class="mop op-symbol large-op" style="margin-right:0.4445em;position:relative;top:-0.0011em;">∫</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.564em;"><span style="top:-1.7881em;margin-left:-0.4445em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">0</span></span></span><span style="top:-3.8129em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.9119em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:0.1667em;"></span><span class="mord mathnormal">d</span><span class="mord mathnormal">x</span><span class="mspace" style="margin-right:0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2778em;"></span></span><span class="base"><span class="strut" style="height:1.1901em;vertical-align:-0.345em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.8451em;"><span style="top:-2.655em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.394em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.345em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span></span></eqn></section><h2 id="markdown-kitchen-sink--heading-level-two" tabindex="-1">Heading level two <a class="heading-anchor" href="/markdown-kitchen-sink/#heading-level-two" aria-hidden="true">#</a></h2>
+<p>Text with <em>emphasis</em>, <strong>strong</strong>, <code>inline code</code>, and “typographer quotes”.</p>
+<h3 id="markdown-kitchen-sink--heading-level-three" tabindex="-1">Heading level three <a class="heading-anchor" href="/markdown-kitchen-sink/#heading-level-three" aria-hidden="true">#</a></h3>
+<pre class="code-block"><code class="hljs language-python"><span class="hljs-keyword">def</span> <span class="hljs-title function_">greet</span>(<span class="hljs-params">name: <span class="hljs-built_in">str</span></span>) -&gt; <span class="hljs-built_in">str</span>:
+    <span class="hljs-keyword">return</span> <span class="hljs-string">f&quot;hello <span class="hljs-subst">{name}</span>&quot;</span>
+</code></pre>
+<pre class="code-block"><code class="hljs language-javascript"><span class="hljs-keyword">const</span> <span class="hljs-title function_">greet</span> = (<span class="hljs-params">name</span>) =&gt; <span class="hljs-string">`hello <span class="hljs-subst">${name}</span>`</span>;
+</code></pre>
+<h4 id="markdown-kitchen-sink--heading-level-four" tabindex="-1">Heading level four <a class="heading-anchor" href="/markdown-kitchen-sink/#heading-level-four" aria-hidden="true">#</a></h4>
+<table>
+<thead>
+<tr>
+<th>Column A</th>
+<th>Column B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>one</td>
+<td>two</td>
+</tr>
+</tbody>
+</table>
+<p><img src="/images/diagram.png" alt="A diagram" loading="lazy"></p>
+<p>An <a href="https://example.com/page" target="_blank" rel="noopener noreferrer">external link</a> and an <a href="/welcome/">internal link</a>.</p>
+<blockquote>
+<p>A blockquote for good measure.</p>
+</blockquote>
+
+            </div>
+          </article>
+          <article class="feed-post fade-up">
+            <header class="feed-header">
+              <div class="post-meta">
+                <time datetime="2026-06-25T00:00:00.000Z">June 25, 2026</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>1 min read</span>
+              </div>
+              <h2 class="feed-title"><a href="/welcome/">Setting up</a></h2>
+              <div class="chip-row" aria-label="Tags"><a class="chip" href="/tags/meta/">meta</a></div>
+            </header>
+            <div class="prose">
+<p>This is the first post on the blog. It exists mostly to prove that the whole pipeline works end to end.</p>
+<h2 id="welcome--why-this-blog%3F" tabindex="-1">Why this blog? <a class="heading-anchor" href="/welcome/#why-this-blog%3F" aria-hidden="true">#</a></h2>
+<ul>
+<li>Data sovereignty</li>
+<li>Consistent looks and feel</li>
+</ul>
+
+            </div>
+          </article>
+          </div>
+          <div class="listing-view listing-table">
+          <div class="post-table-frame">
+            <table class="post-table">
+              <thead>
+                <tr><th scope="col">Title</th><th scope="col">Date</th><th scope="col">Tags</th></tr>
+              </thead>
+              <tbody>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/same-date-alpha/">Same date, alpha</a></th>
+                <td class="post-table-date"><time datetime="2026-07-06T00:00:00.000Z">July 6, 2026</time></td>
+                <td class="post-table-tags"><a class="chip" href="/tags/testing/">testing</a></td>
+              </tr>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/same-date-beta/">Same date, beta</a></th>
+                <td class="post-table-date"><time datetime="2026-07-06T00:00:00.000Z">July 6, 2026</time></td>
+                <td class="post-table-tags"><a class="chip" href="/tags/testing/">testing</a></td>
+              </tr>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/embeds/">Per-post embed hooks</a></th>
+                <td class="post-table-date"><time datetime="2026-07-05T00:00:00.000Z">July 5, 2026</time></td>
+                <td class="post-table-tags"><a class="chip" href="/tags/testing/">testing</a></td>
+              </tr>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/untagged/">A post with no tags</a></th>
+                <td class="post-table-date"><time datetime="2026-07-03T00:00:00.000Z">July 3, 2026</time></td>
+                <td class="post-table-tags"></td>
+              </tr>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/latex-note/">A LaTeX-sourced note</a></th>
+                <td class="post-table-date"><time datetime="2026-07-02T00:00:00.000Z">July 2, 2026</time></td>
+                <td class="post-table-tags"><a class="chip" href="/tags/latex/">latex</a><a class="chip" href="/tags/testing/">testing</a></td>
+              </tr>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/markdown-kitchen-sink/">Markdown kitchen sink</a></th>
+                <td class="post-table-date"><time datetime="2026-07-01T00:00:00.000Z">July 1, 2026</time></td>
+                <td class="post-table-tags"><a class="chip" href="/tags/markdown/">markdown</a><a class="chip" href="/tags/testing/">testing</a></td>
+              </tr>
+              <tr>
+                <th scope="row" class="post-table-title"><a href="/welcome/">Setting up</a></th>
+                <td class="post-table-date"><time datetime="2026-06-25T00:00:00.000Z">June 25, 2026</time></td>
+                <td class="post-table-tags"><a class="chip" href="/tags/meta/">meta</a></td>
+              </tr>
+              </tbody>
+            </table>
+          </div>
+          </div>
       </div>
     </section>
   </main>

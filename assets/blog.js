@@ -41,19 +41,65 @@
         });
     }
 
-    // Clickable database rows: the row is a <div>; the title holds the real link
-    // (so tag chips can be their own links without nesting anchors). Clicking
-    // anywhere on the row that isn't a real link navigates to the post.
-    document.querySelectorAll(".db-row").forEach(function (row) {
-        var link = row.querySelector(".db-title a");
+    // Feed/table switch on listing pages. The head script has already shown the
+    // reader's choice before first paint (lib/templates.mjs); this keeps the
+    // buttons truthful and remembers a new choice.
+    var VIEW_KEY = "blog:view";
+    var root = document.documentElement;
+    var viewButtons = document.querySelectorAll("[data-view-option]");
+
+    function showView(view) {
+        if (view === "table") root.setAttribute("data-view", "table");
+        else root.removeAttribute("data-view");
+        viewButtons.forEach(function (button) {
+            button.setAttribute("aria-pressed", String(button.getAttribute("data-view-option") === view));
+        });
+    }
+
+    if (viewButtons.length) {
+        showView(root.getAttribute("data-view") === "table" ? "table" : "feed");
+        viewButtons.forEach(function (button) {
+            button.addEventListener("click", function () {
+                var view = button.getAttribute("data-view-option");
+                showView(view);
+                var stored = false;
+                try {
+                    localStorage.setItem(VIEW_KEY, view);
+                    stored = true;
+                } catch (e) { /* storage refused; the address carries the choice instead */ }
+                // A ?view= in the address outranks storage on the next load, so
+                // it must agree with this choice: dropped once storage holds it,
+                // kept in its place when storage is refused.
+                try {
+                    var url = new URL(window.location.href);
+                    if (stored) url.searchParams.delete("view");
+                    else url.searchParams.set("view", view);
+                    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+                } catch (e) { /* the view still switched; only the reload memory is lost */ }
+            });
+        });
+    }
+
+    // Clickable table rows: the title holds the real link, so tag chips can be
+    // links of their own without nesting anchors. Clicking anywhere else on the
+    // row goes to the post, unless the reader was selecting text.
+    document.querySelectorAll(".post-table tbody tr").forEach(function (row) {
+        var link = row.querySelector(".post-table-title a");
         if (!link) return;
         row.addEventListener("click", function (e) {
-            if (e.target.closest("a")) return; // let title/tag links act normally
+            if (e.target.closest("a")) return;
+            if (window.getSelection && String(window.getSelection())) return;
             window.location.href = link.href;
         });
     });
 
     // Scroll-triggered reveal (ported from the main site).
+    //
+    // Threshold 0: reveal as soon as any part is on screen. The main site's 0.1
+    // meant "a tenth of the element is visible", which an element more than ten
+    // screens tall can never be, and Chromium then never reports it as
+    // intersecting at all. A long post's body, or a long article in the feed,
+    // stayed invisible however far the reader scrolled.
     var fadeEls = document.querySelectorAll(".fade-up");
     if ("IntersectionObserver" in window) {
         var observer = new IntersectionObserver(function (entries) {
@@ -63,7 +109,7 @@
                     observer.unobserve(entry.target);
                 }
             });
-        }, { threshold: 0.1 });
+        }, { threshold: 0 });
         fadeEls.forEach(function (el) { observer.observe(el); });
     } else {
         fadeEls.forEach(function (el) { el.classList.add("is-visible"); });

@@ -7,7 +7,8 @@ import matter from "gray-matter";
 import { collectPosts, groupByTag, loadPost, ContentError } from "./lib/content.mjs";
 import { ENGINE } from "./lib/sanitize.mjs";
 import { hasR2Config } from "./lib/server/config.mjs";
-import { postPage, listPage, tagPage, notFoundPage, tagSlug } from "./lib/templates.mjs";
+import { postPage, listPage, tagPage, notFoundPage, tagSlug, feedWeight } from "./lib/templates.mjs";
+import { listingPages, FEED_PAGE_BYTES } from "./lib/listing.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +17,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const POSTS_DIR = process.env.BLOG_POSTS_DIR || path.join(ROOT, "content", "posts");
 const ASSETS_DIR = process.env.BLOG_ASSETS_DIR || path.join(ROOT, "assets");
 const DIST = process.env.BLOG_DIST_DIR || path.join(ROOT, "dist");
+// Same purpose: lets a test paginate a small corpus. Unset in normal use.
+const FEED_BUDGET = Number(process.env.BLOG_FEED_PAGE_BYTES) || FEED_PAGE_BYTES;
 const KATEX_DIST = path.join(ROOT, "node_modules", "katex", "dist");
 
 function rmrf(p) {
@@ -121,17 +124,28 @@ async function build() {
     write(path.join(post.slug, "index.html"), postPage(post));
   }
 
-  // Per-tag pages -> /tags/<slug>/index.html. Posts are already newest-first,
-  // so each tag's list inherits that order.
+  // Listings: the home page and one per tag, each split into feed pages by
+  // rendered weight (lib/listing.mjs) -> <base>index.html, <base>page/<n>/index.html.
+  // Posts are already newest-first, so every listing inherits that order.
+  const listing = { pages: 0, heaviest: 0 };
+  const writeListing = (base, scope, render) => {
+    for (const page of listingPages(scope, { base, budget: FEED_BUDGET, weigh: feedWeight })) {
+      const html = render(page);
+      write(path.join(page.path, "index.html"), html);
+      listing.pages++;
+      listing.heaviest = Math.max(listing.heaviest, Buffer.byteLength(html));
+    }
+  };
+
+  writeListing("/", posts, (page) => listPage(posts, page));
   const tagMap = groupByTag(posts, tagSlug);
   const tagPaths = [];
   for (const [slug, { tag, posts: tagged }] of tagMap) {
-    write(path.join("tags", slug, "index.html"), tagPage(tag, tagged));
+    writeListing(`/tags/${slug}/`, tagged, (page) => tagPage(tag, tagged, page));
     tagPaths.push(`/tags/${slug}/`);
   }
+  console.log(`  listings: ${listing.pages} page(s), heaviest ${(listing.heaviest / 1024).toFixed(1)} KB`);
 
-  // Listing, 404
-  write("index.html", listPage(posts));
   write("404.html", notFoundPage());
 
   // Feeds + crawl files

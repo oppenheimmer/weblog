@@ -139,6 +139,11 @@ With `distill: true`, the **self-hosted** `template.v2.js` (vendored at
 work in the body. Standalone components drop in cleanly; page-layout `<d-*>`
 components (byline, citation auto-numbering) are experimental.
 
+A post using any of these hooks, or raw `<script>`/`<style>`/`<link>` in its
+body, appears in the feed as its title and description with a link, not inline:
+its code assumes it owns the page, and two such posts side by side could load a
+bundle twice or bind each other's elements. It runs on its own page, once.
+
 ---
 
 ## Local development
@@ -177,11 +182,13 @@ node --env-file=.env scripts/verify-store.mjs # storage layer vs. real R2
 | `lib/templates.mjs`           | HTML shell, header/footer chrome, per-post SEO (OG, JSON-LD), `SITE`|
 | `lib/feed.mjs`                | RSS, sitemap (incl. tag URLs), robots.txt builders                  |
 | `assets/styles/blog.css`      | Design system + copied `katex.min.css` and fonts                    |
-| `assets/blog.js`              | Small runtime: mobile nav, clickable list rows, scroll reveal       |
+| `assets/blog.js`              | Small runtime: mobile nav, feed/table switch, clickable rows, reveal |
 | `assets/images/`              | Global media → served at `/images/…`                                |
 | `assets/posts/<slug>/`        | Optional per-post JS/CSS embeds → `/assets/posts/<slug>/…`          |
 | `assets/vendor/`              | Self-hosted third-party libs (distill `template.v2.js`)             |
 | `lib/content.mjs`             | Source text → validated, rendered post. No filesystem access        |
+| `lib/listing.mjs`             | Listing model: feed pages split by rendered weight, embed rule      |
+| `lib/markup.mjs`              | Attribute edits so posts can share a page: ids, image sizes, lazy   |
 | `lib/server/config.mjs`       | R2 settings, validated; never logs a credential value               |
 | `lib/server/r2.mjs`           | R2 object store: JSON records, conditional writes, presigned URLs   |
 | `test/`                       | Golden output, contract invariants, tripwires, storage semantics    |
@@ -194,9 +201,10 @@ detect math to gate the KaTeX stylesheet per page, sort newest-first, then emit:
 
 ```
 dist/
-  index.html              # the post listing (Notion-style table)
+  index.html              # the listing: full articles, with a table view of every post
+  page/<n>/index.html     # further feed pages, split by rendered weight
   <slug>/index.html       # one per post (pretty URLs)
-  tags/<slug>/index.html  # one per distinct tag
+  tags/<slug>/index.html  # one per distinct tag, paginated the same way
   feed.xml  sitemap.xml  robots.txt  404.html
   styles/   (blog.css, katex.min.css, fonts/)
   images/   assets/posts/   assets/vendor/   blog.js   favicon.svg

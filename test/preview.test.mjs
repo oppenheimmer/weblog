@@ -120,6 +120,9 @@ test("images come from the verified attachment on a short-lived signed URL, and 
     postPage(published),
     "the preview differs from the published page by more than the image URL"
   );
+  // The fixture is 7x11. Both pages reserve that space, which is only true of
+  // the preview if it sizes images from the same manifest the build does.
+  assert.match(postPage(published), /<img src="\/images\/uploads\/pictures\/diagram\.png" alt="A diagram" width="7" height="11">/);
 });
 
 test("a .tex snippet previews inline, as it will publish", async () => {

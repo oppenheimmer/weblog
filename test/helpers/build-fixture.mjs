@@ -35,7 +35,7 @@ export function sha256(buf) {
  * Build the fixture corpus into a fresh temp directory.
  * Returns the dist path; the caller is responsible for cleanup.
  */
-export function buildFixtures({ postsDir = path.join(FIXTURES, "content", "posts") } = {}) {
+export function buildFixtures({ postsDir = path.join(FIXTURES, "content", "posts"), env = {} } = {}) {
   const dist = fs.mkdtempSync(path.join(os.tmpdir(), "blog-fixture-"));
   execFileSync(process.execPath, [path.join(ROOT, "build.mjs")], {
     cwd: ROOT,
@@ -44,6 +44,7 @@ export function buildFixtures({ postsDir = path.join(FIXTURES, "content", "posts
       BLOG_POSTS_DIR: postsDir,
       BLOG_ASSETS_DIR: path.join(FIXTURES, "assets"),
       BLOG_DIST_DIR: dist,
+      ...env,
     },
     stdio: "pipe",
   });

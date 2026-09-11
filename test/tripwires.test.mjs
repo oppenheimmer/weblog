@@ -251,22 +251,21 @@ test("tripwire: the repository is an engine and holds no content", () => {
 });
 
 test("tripwire: the post listing exposes a well-formed table to assistive tech", () => {
+  // This was once an ARIA table built from divs, and the tag column fell out of
+  // the accessibility tree because one branch forgot role="cell". A native
+  // table cannot drop a column that way; what it can lose is the headers that
+  // tie each cell to its column and row.
   const dist = buildFixtures();
   try {
     const html = fs.readFileSync(path.join(dist, "index.html"), "utf8");
-    if (html.includes('role="table"')) {
-      // ARIA grid: every child of a row must carry a cell role.
-      const rows = [...html.matchAll(/<div class="db-row"[^>]*>([\s\S]*?)<\/div>\s*(?=<div class="db-row"|<\/div>)/g)];
-      assert.ok(rows.length > 0, "no rows found in the ARIA table");
-      for (const [, body] of rows) {
-        const children = [...body.matchAll(/<(span|time|div)\s[^>]*class="db-(title|tags|date)"[^>]*>/g)];
-        for (const [tag] of children) {
-          assert.match(tag, /role="cell"/, `row child is missing role="cell": ${tag}`);
-        }
-      }
-    } else {
-      assert.match(html, /<table[\s>]/, "listing is neither an ARIA table nor a native table");
-    }
+    const table = html.match(/<table class="post-table">([\s\S]*?)<\/table>/);
+    assert.ok(table, "the listing has no native table");
+    assert.equal((table[1].match(/<th scope="col">/g) ?? []).length, 3, "column headers are missing their scope");
+    const rows = [...table[1].matchAll(/<tr>\s*<th scope="row"[^>]*>[\s\S]*?<\/tr>/g)];
+    const bodyRows = (table[1].split("<tbody>")[1].match(/<tr>/g) ?? []).length;
+    assert.ok(bodyRows > 0, "the table has no rows");
+    assert.equal(rows.length, bodyRows, "a row has no row header, so its cells are not tied to a post");
+    for (const [row] of rows) assert.equal((row.match(/<t[hd][\s>]/g) ?? []).length, 3, `a row lost a cell:\n${row}`);
   } finally {
     cleanup(dist);
   }
@@ -299,4 +298,135 @@ test("tripwire: the editor's preview frame is sandboxed with no permissions at a
   assert.ok(sandbox, "the preview frame has no sandbox attribute");
   assert.equal(sandbox[1].trim(), "", `the preview frame was granted: ${sandbox[1]}`);
   assert.match(frame[0], /referrerpolicy="no-referrer"/, "preview requests would leak the editor URL");
+});
+
+/** The inline script a listing page runs in its head to pick a view. */
+async function viewScript() {
+  const { listPage } = await import("../lib/templates.mjs");
+  const post = {
+    slug: "a", title: "A", date: "2026-01-01T00:00:00.000Z", description: "", tags: [],
+    readingTime: 1, math: false, html: "<p>a</p>", scripts: [], styles: [], head: "", distill: false,
+  };
+  const match = listPage([post]).match(/<head>[\s\S]*?<script>(\(function\(\)\{[\s\S]*?)<\/script>/);
+  assert.ok(match, "the listing page has no view script in its head");
+  return match[1];
+}
+
+/** Run it against a stand-in browser. Returns the view it chose. */
+async function chooseView({ search = "", stored = null, storage = "ok" } = {}) {
+  const vm = await import("node:vm");
+  const { VIEW_STORAGE_KEY } = await import("../lib/templates.mjs");
+  const root = {};
+  const context = {
+    URLSearchParams,
+    location: { search },
+    document: { documentElement: { setAttribute: (name, value) => { root[name] = value; } } },
+  };
+  // Browsers refuse storage two ways: the property itself throws (storage
+  // disabled, some sandboxed frames), or reading from it does (quota, policy).
+  Object.defineProperty(context, "localStorage", {
+    get() {
+      if (storage === "property-throws") throw new Error("SecurityError: The operation is insecure.");
+      return {
+        getItem(key) {
+          if (storage === "read-throws") throw new Error("SecurityError: Access is denied.");
+          return key === VIEW_STORAGE_KEY ? stored : null;
+        },
+      };
+    },
+  });
+  vm.runInNewContext(await viewScript(), context);
+  return root["data-view"] ?? "feed";
+}
+
+test("tripwire: the listing view survives refused storage and odd addresses", async () => {
+  assert.equal(await chooseView(), "feed", "the default must be the feed");
+  assert.equal(await chooseView({ stored: "table" }), "table", "a remembered choice was ignored");
+  assert.equal(await chooseView({ stored: "grid" }), "feed", "an unknown stored value was honoured");
+  assert.equal(await chooseView({ search: "?view=table" }), "table");
+  assert.equal(await chooseView({ search: "?view=feed", stored: "table" }), "feed", "the address must outrank storage");
+  assert.equal(await chooseView({ search: "?view=TABLE", stored: "feed" }), "feed", "an unknown address value was honoured");
+  assert.equal(await chooseView({ search: "?view=bogus", stored: "table" }), "table", "an unknown address value hid the remembered choice");
+  for (const storage of ["property-throws", "read-throws"]) {
+    assert.equal(await chooseView({ storage }), "feed", `${storage}: refused storage must fall back, not throw`);
+    assert.equal(await chooseView({ storage, search: "?view=table" }), "table", `${storage}: the address must still work`);
+  }
+});
+
+test("tripwire: the head script and blog.js remember the view under the same key", async () => {
+  const { VIEW_STORAGE_KEY } = await import("../lib/templates.mjs");
+  const client = fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8");
+  assert.ok(client.includes(`"${VIEW_STORAGE_KEY}"`), `blog.js does not use ${VIEW_STORAGE_KEY}, so a choice would not survive a reload`);
+});
+
+/** Flat list of style rules with the at-rules enclosing each. */
+function styleRules(css, atRules = []) {
+  const rules = [];
+  let i = 0;
+  while (i < css.length) {
+    const brace = css.indexOf("{", i);
+    if (brace === -1) break;
+    const prelude = css.slice(i, brace).trim().replace(/\s+/g, " ");
+    let depth = 1, j = brace + 1;
+    while (j < css.length && depth > 0) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}") depth--;
+      j++;
+    }
+    const body = css.slice(brace + 1, j - 1);
+    if (prelude.startsWith("@")) rules.push(...styleRules(body, [...atRules, prelude]));
+    else for (const selector of prelude.split(",")) rules.push({ selector: selector.trim(), body, atRules });
+    i = j;
+  }
+  return rules;
+}
+
+test("tripwire: without a chosen table, readers get the feed; the switch needs script to appear", () => {
+  const css = fs.readFileSync(path.join(ROOT, "assets", "styles", "blog.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = styleRules(css);
+  const display = (rule) => rule.body.match(/display\s*:\s*([a-z-]+)/)?.[1];
+  const chosen = (rule) => /\[data-view="table"\]/.test(rule.selector) && !/:not\(/.test(rule.selector);
+
+  const hidesFeed = rules.filter((r) => /\.listing-feed\b/.test(r.selector) && display(r) === "none");
+  assert.ok(hidesFeed.length > 0, "nothing ever hides the feed, so the table view cannot work");
+  for (const rule of hidesFeed) {
+    assert.ok(chosen(rule), `"${rule.selector}" hides the feed without the reader choosing the table — no-script readers would see nothing`);
+  }
+
+  const tableRules = rules.filter((r) => /\.listing-table\b/.test(r.selector) && display(r));
+  assert.ok(tableRules.some((r) => r.selector === ".listing-table" && display(r) === "none" && !r.atRules.length),
+    "the table is not hidden by default, so both views would show at once");
+  const showsTable = tableRules.filter((r) => display(r) !== "none");
+  assert.ok(showsTable.length > 0, "nothing shows the table once it is chosen");
+  for (const rule of showsTable) {
+    assert.ok(chosen(rule), `"${rule.selector}" shows the table without it being chosen`);
+  }
+
+  // Hiding must be display:none, which also removes the view from the tab order
+  // and the accessibility tree; opacity or visibility would leave it reachable.
+  for (const rule of rules.filter((r) => /\.listing-(feed|table)\b/.test(r.selector))) {
+    assert.ok(!/(visibility\s*:\s*hidden|opacity\s*:\s*0\b)/.test(rule.body), `"${rule.selector}" hides a view but leaves it focusable`);
+  }
+
+  const switchRules = rules.filter((r) => /\.view-switch$/.test(r.selector) && display(r));
+  assert.ok(switchRules.some((r) => r.selector === ".view-switch" && display(r) === "none"), "the switch shows without script, where it cannot work");
+  for (const rule of switchRules.filter((r) => display(r) !== "none")) {
+    assert.match(rule.selector, /\.js\b/, `"${rule.selector}" shows the switch without script`);
+  }
+});
+
+test("tripwire: the reveal fires for elements taller than the screen", () => {
+  // A positive threshold is a fraction of the element that must be visible. A
+  // post body ten screens tall can never show a tenth of itself, and Chromium
+  // then never reports it intersecting: with 0.1 every long post rendered
+  // blank for readers with script on and motion allowed. Measured, not assumed
+  // (scripts/verify-listing.mjs).
+  const client = fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8").replace(/\/\/.*$/gm, "");
+  const observers = [...client.matchAll(/new IntersectionObserver\([\s\S]*?\{([^{}]*)\}\s*\)/g)];
+  assert.ok(observers.length > 0, "no reveal observer found, but .fade-up content still starts hidden");
+  for (const [, options] of observers) {
+    const threshold = options.match(/threshold\s*:\s*([^,}\s]+)/)?.[1] ?? "0";
+    assert.equal(threshold, "0", `the reveal observer uses threshold ${threshold}, which tall content never reaches`);
+    assert.ok(!/rootMargin\s*:\s*["'][^"']*-/.test(options), "a negative rootMargin can leave content at the page bottom unrevealed");
+  }
 });
