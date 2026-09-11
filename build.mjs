@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
 import { collectPosts, groupByTag, loadPost, ContentError } from "./lib/content.mjs";
+import { ENGINE } from "./lib/sanitize.mjs";
 import { hasR2Config } from "./lib/server/config.mjs";
 import { postPage, listPage, tagPage, notFoundPage, tagSlug } from "./lib/templates.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
@@ -43,7 +44,10 @@ function loadPosts() {
 
   for (const file of files) {
     const raw = fs.readFileSync(path.join(POSTS_DIR, file), "utf8");
-    const post = loadPost(raw, { sourceName: file });
+    // The only ENGINE-trust call site in the project: these files are in the
+    // repository, so they are the owner's own and may embed raw HTML and the
+    // per-post script hooks. Everything arriving from R2 is untrusted by default.
+    const post = loadPost(raw, { sourceName: file, trust: ENGINE });
     if (!post) {
       console.log(`  - skipped (draft): ${file}`);
       continue;
