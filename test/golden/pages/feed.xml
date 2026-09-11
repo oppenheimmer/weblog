@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Sourav Mishra — Blog</title>
+    <title>Weblog</title>
     <link>https://blog.souravmishra.net/</link>
     <atom:link href="https://blog.souravmishra.net/feed.xml" rel="self" type="application/rss+xml" />
-    <description>Notes on computer vision, limited-data deep learning, LLMs, and applied AI by Sourav Mishra.</description>
+    <description>Notes on CS, ML and some Math.</description>
     <language>en</language>
     <lastBuildDate>Mon, 06 Jul 2026 00:00:00 GMT</lastBuildDate>
     <item>
