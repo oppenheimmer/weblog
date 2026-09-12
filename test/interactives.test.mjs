@@ -238,3 +238,143 @@ test("bounds hold per file, per bundle and per file count", () => {
   const heavy = Array.from({ length: 4 }, (_, i) => file(`f${i}.json`, { bytes: LIMITS.fileBytes }));
   assert.equal(refusal(demo({ files: [file("index.html"), file("fallback.html"), ...heavy] })).code, "bundle_too_large");
 });
+
+// ------------------------------------------------- references and the fallback
+
+import {
+  resolveInteractiveReferences, readInteractivePayload, validateFallback,
+  findInteractiveReferences,
+} from "../lib/interactives.mjs";
+import { renderInteractive } from "../lib/markdown.mjs";
+
+const bundle = (over = {}) => ({
+  id: "i_00000000000000b1", postId: POST, kind: "demo", name: "orbit",
+  revisionId: "iv_00000000000000c1", entry: "index.html", fallback: "fallback.html",
+  status: "verified", files: [file("index.html"), file("fallback.html")], ...over,
+});
+
+const resolveRefusal = (body, options) => {
+  try {
+    resolveInteractiveReferences(body, { slug: "a-post", postId: POST, ...options });
+  } catch (err) {
+    assert.ok(err instanceof InteractiveError, `threw a ${err.name}`);
+    return err;
+  }
+  assert.fail("the reference was accepted");
+};
+
+test("a reference is found outside code and ignored inside it", () => {
+  const body = "See ::demo[i_1] and ::figure[i_2].\n\n```\n::demo[i_3]\n```\n";
+  assert.deepEqual(findInteractiveReferences(body, "markdown"), [
+    { kind: "demo", id: "i_1" },
+    { kind: "figure", id: "i_2" },
+  ]);
+  // LaTeX has no way to name an interactive at all (§4.2).
+  assert.deepEqual(findInteractiveReferences(body, "latex"), []);
+});
+
+test("a bundle owned by another post is refused even when handed over directly", () => {
+  // The store already scopes a listing to one post, so this is the second
+  // lock: a caller that assembles the list itself cannot resolve a foreign
+  // bundle by passing it in.
+  const foreign = bundle({ postId: "p_00000000000000bb" });
+  const error = resolveRefusal(`::demo[${foreign.id}]`, {
+    interactives: [foreign], fallbacks: new Map([[foreign.id, "<p>x</p>"]]),
+  });
+  assert.equal(error.code, "unknown_interactive");
+});
+
+test("an unverified bundle cannot be referenced", () => {
+  const pending = bundle({ status: "pending" });
+  assert.equal(resolveRefusal(`::demo[${pending.id}]`, { interactives: [pending] }).code,
+    "unknown_interactive");
+});
+
+test("a figure referenced as a lab is a wrong-kind refusal", () => {
+  const figureBundle = bundle({ kind: "figure", entry: "main.mjs" });
+  const error = resolveRefusal(`::demo[${figureBundle.id}]`, {
+    interactives: [figureBundle], fallbacks: new Map([[figureBundle.id, "<p>x</p>"]]),
+  });
+  assert.equal(error.code, "wrong_kind");
+});
+
+test("a resolved payload survives a fallback containing backticks", () => {
+  // The payload travels in a fenced block, so a fallback that contains three
+  // backticks would otherwise end the fence and spill JSON into the article.
+  const record = bundle();
+  const { body } = resolveInteractiveReferences(`::demo[${record.id}]`, {
+    slug: "a-post", postId: POST, interactives: [record],
+    fallbacks: new Map([[record.id, "<p>Use ``` for code</p>"]]),
+  });
+  const fence = body.match(/```weblog-interactive\n([\s\S]*?)\n```/);
+  assert.ok(fence, "the payload did not survive as a single fence");
+  assert.ok(!fence[1].includes("```"), "a fence was left inside a fence");
+  assert.ok(readInteractivePayload(fence[1]).fallback.includes("```"), "the fallback lost its text");
+});
+
+test("the renderer refuses a payload a resolver would not have written", () => {
+  // A post may legitimately contain three backticks, so the renderer cannot
+  // tell this fence from one an author typed. Every payload is re-checked.
+  const hostile = [
+    { kind: "demo", src: "https://evil.example/x.html", fallback: "" },
+    { kind: "demo", src: "/demos/../../etc/passwd", fallback: "" },
+    { kind: "demo", src: "/api/drafts/index.html", fallback: "" },
+    { kind: "demo", src: "/demos/a/b/not-a-revision/index.html", fallback: "" },
+    { kind: "figure", src: "/demos/a/b/iv_00000000000000c1/index.html", fallback: "" },
+    { kind: "demo", src: "/demos/a/b/iv_00000000000000c1/index.html", fallback: "<script>x()</script>" },
+  ];
+  for (const payload of hostile) {
+    assert.equal(readInteractivePayload(JSON.stringify(payload)), null, JSON.stringify(payload.src));
+    assert.match(renderInteractive(JSON.stringify(payload)), /interactive--broken/, JSON.stringify(payload));
+  }
+  assert.equal(readInteractivePayload("not json at all"), null);
+
+  const good = { kind: "demo", name: "orbit", src: "/demos/a-post/orbit/iv_00000000000000c1/index.html", fallback: "<p>ok</p>" };
+  assert.ok(readInteractivePayload(JSON.stringify(good)), "a legitimate payload was refused");
+  const html = renderInteractive(JSON.stringify(good));
+  assert.ok(!/<iframe/i.test(html), "static HTML shipped an iframe");
+  assert.match(html, /data-interactive-src="\/demos\/a-post\/orbit\/iv_00000000000000c1\/index\.html"/);
+});
+
+test("a fallback is validated rather than cleaned", () => {
+  assert.equal(validateFallback("<p>Plain <strong>text</strong>.</p>"), "<p>Plain <strong>text</strong>.</p>");
+
+  for (const hostile of [
+    "<script>steal()</script>",
+    "<p onclick='steal()'>x</p>",
+    "<p style='position:fixed'>x</p>",
+    "<iframe src='/'></iframe>",
+    "<a href='javascript:steal()'>x</a>",
+    "<!-- <script>x</script> -->",
+    "<form><input></form>",
+    "<svg onload='steal()'></svg>",
+  ]) {
+    assert.throws(() => validateFallback(hostile), InteractiveError, hostile);
+  }
+});
+
+test("a fallback that would swallow the article around it is refused", () => {
+  // An unclosed tag does not break the fallback; it breaks every element that
+  // comes after it on the page.
+  assert.throws(() => validateFallback("<div><p>left open"), InteractiveError);
+  assert.throws(() => validateFallback("<p>crossed</div>"), InteractiveError);
+  assert.throws(() => validateFallback("</p>"), InteractiveError);
+  // Void elements are not a missing close tag.
+  assert.equal(validateFallback("<p>one<br>two</p>"), "<p>one<br />two</p>");
+});
+
+test("a fallback's image is pinned to a file the bundle declares", () => {
+  const files = [file("fallback.html"), file("still.png")];
+  assert.equal(
+    validateFallback('<p><img src="./still.png" alt="a still"></p>', { files, publicPath: "/demos/a/b/iv_1/" }),
+    '<p><img src="/demos/a/b/iv_1/still.png" alt="a still" /></p>'
+  );
+  assert.throws(
+    () => validateFallback('<img src="./missing.png">', { files, publicPath: "/demos/a/b/iv_1/" }),
+    InteractiveError
+  );
+  assert.throws(
+    () => validateFallback('<img src="https://evil.example/pixel.png">', { files, publicPath: "/demos/a/b/iv_1/" }),
+    InteractiveError
+  );
+});

@@ -92,7 +92,7 @@ async function readPosts() {
  * between builds, which is what stops clean-build cost growing with every post.
  */
 async function syncMedia(posts) {
-  if (!posts.some((post) => post.media?.length)) return;
+  if (!posts.some((post) => post.media?.length || post.interactives?.length)) return;
   const [{ createStore }, { syncPublishedMedia }] = await Promise.all([
     import("./lib/server/r2.mjs"),
     import("./lib/server/media-sync.mjs"),
@@ -104,7 +104,8 @@ async function syncMedia(posts) {
     cacheDir: path.join(ROOT, "node_modules", ".cache", "weblog-media"),
   });
   console.log(
-    `  media: ${stats.files} file(s), ${stats.downloaded} downloaded, ${stats.cached} from cache, ` +
+    `  media: ${stats.files} file(s)${stats.bundleFiles ? ` (${stats.bundleFiles} interactive)` : ""}, ` +
+    `${stats.downloaded} downloaded, ${stats.cached} from cache, ` +
     `${(stats.bytes / 1024).toFixed(1)} KB in ${stats.ms} ms`
   );
 }

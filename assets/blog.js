@@ -114,4 +114,59 @@
     } else {
         fadeEls.forEach(function (el) { el.classList.add("is-visible"); });
     }
+
+    // Interactive labs (CLAUDE.md §3.6).
+    //
+    // The published page carries only the fallback. The iframe is built here,
+    // and only on a post's own page, which is what makes three of §3.6's rules
+    // true at once: a listing shows the fallback and runs nothing, a reader
+    // without JavaScript gets the fallback rather than an empty rectangle, and
+    // the sandbox attributes live in one place a tripwire can pin rather than
+    // being frozen into revisions published before the rules last changed.
+    //
+    // `allow-same-origin` is never granted. Without it the lab has an opaque
+    // origin and cannot read this document or its cookies; the response header
+    // on /demos/ says the same thing again, for the case where someone opens
+    // the lab's URL directly instead of letting this code frame it.
+    if (document.body.classList.contains("post-page")) {
+        document.querySelectorAll('figure[data-interactive="demo"]').forEach(function (figure) {
+            var src = figure.getAttribute("data-interactive-src");
+            if (!src || src.charAt(0) !== "/") return;
+
+            var frame = document.createElement("iframe");
+            frame.className = "interactive-frame";
+            frame.setAttribute("sandbox", "allow-scripts");
+            frame.setAttribute("referrerpolicy", "no-referrer");
+            frame.setAttribute("loading", "lazy");
+            frame.setAttribute("title", figure.getAttribute("data-interactive-name") || "Interactive");
+            frame.src = src;
+            figure.insertBefore(frame, figure.firstChild);
+            figure.classList.add("interactive--live");
+
+            // The bridge, deliberately tiny (§3.6): presentation only, one
+            // version, and every message checked for source window, shape and
+            // bounds before it changes anything. A lab can ask for its own
+            // height and be told the reader's preferences; it can say nothing
+            // else, and nothing it says reaches the rest of the page.
+            frame.addEventListener("load", function () {
+                try {
+                    frame.contentWindow.postMessage({
+                        weblog: 1,
+                        type: "context",
+                        theme: document.documentElement.getAttribute("data-theme") || "light",
+                        reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                    }, "*");
+                } catch (e) { /* a lab that will not listen is still a lab */ }
+            });
+
+            window.addEventListener("message", function (event) {
+                if (event.source !== frame.contentWindow) return;
+                var data = event.data;
+                if (!data || data.weblog !== 1 || data.type !== "height") return;
+                var height = Number(data.height);
+                if (!isFinite(height) || height < 40 || height > 4000) return;
+                frame.style.height = Math.round(height) + "px";
+            });
+        });
+    }
 })();
