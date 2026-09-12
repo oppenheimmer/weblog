@@ -12,6 +12,7 @@ import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createPublisher, INDEX_KEY } from "../lib/server/publish.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
 import { keys, classifyKey, ownedPrefixes, mediaUrl } from "../lib/server/keys.mjs";
+import { computeRevisionId, validateManifest } from "../lib/interactives.mjs";
 import {
   buildInventory, collectableForPost, collectGarbage, deletePostObjects,
   refreshInventory, formatTree, INVENTORY_KEY,
@@ -21,6 +22,24 @@ import { createFakeS3, FAKE_CONFIG } from "./helpers/fake-r2.mjs";
 const DAY = 24 * 60 * 60 * 1000;
 const A = "p_00000000000000aa";
 const B = "p_00000000000000bb";
+const BUNDLE = "i_00000000000000c1";
+const BUNDLE_REVISION = "iv_00000000000000d1";
+
+/** Every key one interactive bundle occupies, private and published. */
+function bundleKeys(postId) {
+  return [
+    keys.interactiveManifest(postId, BUNDLE, BUNDLE_REVISION),
+    keys.interactiveFile(postId, BUNDLE, BUNDLE_REVISION, "index.html"),
+    keys.interactiveFile(postId, BUNDLE, BUNDLE_REVISION, "lib/plot/draw.mjs"),
+    keys.interactiveName(postId, "orbit"),
+    keys.publishedInteractive(postId, BUNDLE, BUNDLE_REVISION, "index.html"),
+  ];
+}
+
+/** Put a bundle's objects in the bucket, without the upload path that will write them. */
+async function seedBundle(store, postId) {
+  for (const key of bundleKeys(postId)) await store.put(key, Buffer.from("bundle"));
+}
 
 function harness() {
   const client = createFakeS3();
@@ -54,6 +73,12 @@ test("every content key names its owning post", () => {
     [keys.publishedRevision(A, "r_000001_x_1"), "published-revision"],
     [keys.media(A, "diagram.png"), "media"],
     [keys.upload(A, "u_1", "pending.png"), "upload"],
+    // §3.6 makes this the precondition for enabling bundle uploads at all: an
+    // object the collector cannot place is one it will never sweep.
+    [keys.interactiveManifest(A, BUNDLE, BUNDLE_REVISION), "interactive-manifest"],
+    [keys.interactiveFile(A, BUNDLE, BUNDLE_REVISION, "lib/draw.mjs"), "interactive-file"],
+    [keys.interactiveName(A, "orbit"), "interactive-name"],
+    [keys.publishedInteractive(A, BUNDLE, BUNDLE_REVISION, "index.html"), "published-interactive"],
   ];
   for (const [key, kind] of cases) {
     const info = classifyKey(key);
@@ -80,6 +105,31 @@ test("an unrecognised key is reported, never claimed by a post", () => {
   assert.equal(info.owned, false);
 });
 
+test("a bundle key carries the one level no other key has", () => {
+  // Post, interactive, revision, then the file's own relative name — and the
+  // name keeps its directory structure, because `index.html` refers to
+  // `./lib/plot/draw.mjs` by that path and nothing may rewrite it (§3.6).
+  const info = classifyKey(keys.interactiveFile(A, BUNDLE, BUNDLE_REVISION, "lib/plot/draw.mjs"));
+  assert.equal(info.postId, A);
+  assert.equal(info.id, BUNDLE);
+  assert.equal(info.revisionId, BUNDLE_REVISION);
+  assert.equal(info.name, "lib/plot/draw.mjs");
+
+  // Every other kind reports no bundle revision, so a caller reading the field
+  // cannot quietly be handed a draft revision id instead.
+  assert.equal(classifyKey(keys.draftRevision(A, "r_000001_x_1")).revisionId, null);
+  assert.equal(classifyKey(keys.media(A, "a.png")).revisionId, null);
+});
+
+test("a bundle's name claim is not mistaken for a bundle", () => {
+  // `names` sits at the same level as an interactive id. It is told apart by
+  // the id's shape, so a claim can never be read as a revision of something.
+  const claim = classifyKey(keys.interactiveName(A, "orbit"));
+  assert.equal(claim.kind, "interactive-name");
+  assert.equal(claim.postId, A);
+  assert.equal(claim.revisionId, null);
+});
+
 test("storage is keyed by post id while public URLs stay slug-based", () => {
   assert.match(keys.media(A, "diagram.png"), /published\/media\/p_00000000000000aa\/diagram\.png/);
   assert.equal(mediaUrl("a-post", "diagram.png"), "/images/uploads/a-post/diagram.png");
@@ -88,21 +138,27 @@ test("storage is keyed by post id while public URLs stay slug-based", () => {
 // ------------------------------------------------- the blast-radius property
 
 test("deleting one post cannot touch another post's objects", async () => {
-  const { store, publisher, client } = harness();
+  const { store, publisher } = harness();
   await publisher.publish(complete());
   await publisher.publish(complete({ postId: B, slug: "b-post", title: "B", revisionId: "r_000001_bbb_1" }));
   await store.put(keys.media(A, "a.png"), Buffer.from("a"));
   await store.put(keys.media(B, "b.png"), Buffer.from("b"));
 
-  const before = [...client.objects.keys()].filter((k) => classifyKey(k).postId === B);
+  // Read through the store, which is what owns the environment prefix. Listing
+  // the backing client directly returns prefixed keys, which classifyKey reads
+  // as unknown — so an earlier version of this test compared two empty lists
+  // and would have passed however badly deletion behaved.
+  const ownedBy = async (postId) =>
+    (await store.listAll("")).map(({ key }) => key).filter((key) => classifyKey(key).postId === postId);
+
+  const before = await ownedBy(B);
+  assert.ok(before.length > 0, "the fixture wrote nothing for post B, so nothing here is being tested");
+  assert.ok((await ownedBy(A)).length > 0, "the fixture wrote nothing for post A");
+
   await deletePostObjects(store, A, { apply: true });
 
-  const survived = [...client.objects.keys()].filter((k) => classifyKey(k).postId === B);
-  assert.deepEqual(survived.sort(), before.sort(), "deleting post A disturbed post B");
-  assert.equal(
-    [...client.objects.keys()].filter((k) => classifyKey(k).postId === A).length, 0,
-    "post A's objects were not all removed"
-  );
+  assert.deepEqual((await ownedBy(B)).sort(), before.sort(), "deleting post A disturbed post B");
+  assert.equal((await ownedBy(A)).length, 0, "post A's objects were not all removed");
 });
 
 test("a post deletion refuses to touch a key it does not own", async () => {
@@ -132,6 +188,94 @@ test("collection for one post names only that post's keys", async () => {
       `scoped collection named a foreign key: ${key}`);
   }
   assert.ok(!swept.keys.some((k) => k.includes(second.draft.postId)));
+});
+
+// --------------------------------------------------------------- bundles
+
+test("deleting a post takes its interactive bundles with it", async () => {
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  await publisher.publish(complete({ postId: B, slug: "b-post", title: "B", revisionId: "r_000001_bbb_1" }));
+  await seedBundle(store, A);
+  await seedBundle(store, B);
+
+  // Present first, so a sweep that deleted everything could not look like a
+  // sweep that deleted exactly the right thing.
+  for (const key of [...bundleKeys(A), ...bundleKeys(B)]) {
+    assert.ok(await store.get(key), `the fixture never wrote ${key}`);
+  }
+
+  await deletePostObjects(store, A, { apply: true });
+
+  for (const key of bundleKeys(A)) {
+    assert.ok(!(await store.get(key)), `a bundle object outlived its post: ${key}`);
+  }
+  for (const key of bundleKeys(B)) {
+    assert.ok(await store.get(key), `deleting post A took post B's bundle: ${key}`);
+  }
+});
+
+test("a live post's bundles are never collected, whatever their age", async () => {
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  await seedBundle(store, A);
+  backdate(client, "", 400 * DAY);
+
+  const swept = await collectGarbage(store, { apply: true });
+  assert.deepEqual(swept.unknownKeys, [], "a bundle key was not recognised");
+  for (const key of bundleKeys(A)) {
+    assert.ok(await store.get(key), `a published post's bundle was swept: ${key}`);
+  }
+});
+
+test("an orphaned post's bundles are swept with the rest of it", async () => {
+  const { store, drafts, client } = harness();
+  const { draft } = await drafts.create({ title: "Gone", body: "text" });
+  await seedBundle(store, draft.postId);
+  // Discard the draft, leaving the post owning objects nothing references.
+  for (const key of [keys.draftPointer(draft.postId), keys.draftRevision(draft.postId, draft.revisionId)]) {
+    await store.delete(key);
+  }
+  backdate(client, "", 400 * DAY);
+
+  for (const key of bundleKeys(draft.postId)) {
+    assert.ok(await store.get(key), `the fixture never wrote ${key}`);
+  }
+
+  const swept = await collectGarbage(store, { apply: true });
+  for (const key of bundleKeys(draft.postId)) {
+    assert.ok(!(await store.get(key)), `an orphan's bundle survived collection: ${key}`);
+  }
+  assert.ok(swept.deleted >= bundleKeys(draft.postId).length);
+});
+
+test("the inventory counts a bundle's bytes against its post", async () => {
+  const { store, publisher } = harness();
+  await publisher.publish(complete());
+  const before = (await buildInventory(store)).posts.find((p) => p.postId === A);
+  await seedBundle(store, A);
+  const after = (await buildInventory(store)).posts.find((p) => p.postId === A);
+
+  assert.equal(after.interactives.length, bundleKeys(A).length);
+  assert.ok(after.bytes > before.bytes, "bundle bytes were not counted");
+  assert.match(formatTree(await buildInventory(store)), /interactive bundles \(1\)/);
+});
+
+test("a bundle revision is named by its contents, so the key cannot drift", () => {
+  // The id in the key is the same id the contract derives from the manifest.
+  // If these ever disagreed, a published post would name a revision that was
+  // stored under a different key.
+  const manifest = validateManifest({
+    kind: "demo", postId: A, name: "orbit", entry: "index.html", fallback: "fallback.html",
+    files: [
+      { name: "index.html", bytes: 1, sha256: "a".repeat(64) },
+      { name: "fallback.html", bytes: 1, sha256: "b".repeat(64) },
+    ],
+  });
+  const revisionId = computeRevisionId(manifest);
+  const key = keys.interactiveManifest(A, BUNDLE, revisionId);
+  assert.equal(classifyKey(key).revisionId, revisionId);
+  assert.equal(classifyKey(key).kind, "interactive-manifest");
 });
 
 // ------------------------------------------------------ what must survive
