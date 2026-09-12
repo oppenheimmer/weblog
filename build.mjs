@@ -1,4 +1,5 @@
-// Static site generator: content/posts/*.md -> dist/ (static HTML, build-time KaTeX math).
+// Static site generator: published posts (R2, or BLOG_POSTS_DIR) -> dist/
+// (static HTML, build-time KaTeX math). CLAUDE.md §1.1.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

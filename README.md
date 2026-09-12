@@ -123,7 +123,9 @@ sitemap automatically.
 ### Images and `.tex` snippets
 
 Attach files in the editor with the attach button, by pasting, or by dropping
-them on the page. The editor inserts the reference for the post's format:
+them on the page. The editor inserts the reference for the post's format, on a
+line of its own so an image never lands mid-sentence; the **Insert** button in
+the attachment list still inserts exactly at the cursor:
 
 | Attachment     | Markdown                    | LaTeX                                    |
 | -------------- | --------------------------- | ---------------------------------------- |

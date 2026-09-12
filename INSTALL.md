@@ -1,156 +1,400 @@
 # Installing, building, and deploying the blog
 
-This guide covers everything operational: local setup, the build pipeline,
-publishing on **Vercel**, pointing a domain at it, and
-troubleshooting. For the authoring contract (frontmatter, Markdown/LaTeX,
-images, embeds) see [README.md](README.md).
+This guide covers everything operational: local setup, the build pipeline, the
+Cloudflare R2 bucket that holds the content, publishing on **Vercel**, pointing
+a domain at it, day-to-day running, and troubleshooting. For the authoring
+contract (fields, Markdown/LaTeX, attachments, feed and table) see
+[README.md](README.md).
+
+> **Engine here, data in R2.** This repository contains no posts and no media.
+> The build reads published posts from a private Cloudflare R2 bucket; a build
+> with no R2 credentials produces an empty site rather than failing. Publishing
+> happens in the browser at `/editor/`, not by committing files.
 
 ---
 
 ## 0. Prerequisites
 
-| Requirement | Notes                                                            |
-| ----------- | ---------------------------------------------------------------- |
-| **Node ≥ 18** | The build uses native `fs.cpSync` and ES modules. Check `node -v`. |
-| **npm**     | Ships with Node; used for install + scripts.                     |
-| **git**     | The repo is connected to a provider Vercel can import.           |
+| Requirement | Notes |
+| ----------- | ----- |
+| **Node 24.x** | Pinned in `.nvmrc` and `engines`. Vercel rejects anything newer; check with `node -v`. |
+| **npm** | Ships with Node; installs dependencies and runs the scripts. |
+| **git** | The repository is connected to a provider Vercel can import. |
+| **Cloudflare R2** | One private bucket (`weblog-data`) holds drafts, attachments, published revisions, sessions and jobs. |
+| **Vercel** | One project (`weblog`) serves the static site and the `api/` functions. |
+| **Chromium** *(optional)* | Only for the browser verification scripts; set `CHROMIUM` if the binary is not `chromium-browser`. |
 
-No global tools are required — everything (KaTeX, `markdown-it`, `unified-latex`)
-is a local dependency installed by `npm install`. There is **no `pandoc`
-dependency**; LaTeX is converted in pure JS.
+No global tools are required — KaTeX, `markdown-it` and `unified-latex` are all
+local dependencies installed by `npm install`. There is **no `pandoc`
+dependency**; LaTeX is converted in pure JavaScript.
 
 ---
 
-## 1. Local setup & build
+## 1. Local setup and build
 
 ```bash
 git clone <repo-url> website-blog
 cd website-blog
-npm install        # installs build deps + KaTeX (its CSS/fonts are copied at build)
-npm run build      # generates ./dist
-npm run dev        # build + serve dist at http://localhost:4321
+npm install        # build dependencies and KaTeX (its CSS and fonts are copied at build)
+npm run build      # generate ./dist
+npm run dev        # build, then serve dist at http://localhost:4321
 npm run clean      # remove ./dist
+npm test           # the full suite; needs no credentials
 ```
 
 What `npm run build` does (`build.mjs`, single pass):
 
 1. Wipes and recreates `dist/`.
-2. Reads every `.md` / `.tex` in `content/posts/`, parsing the `---` frontmatter
-   with `gray-matter`. Drafts (`draft: true`) are skipped and logged; a post
-   missing `title` or `date` aborts the build with a clear error.
-3. Renders each body — Markdown via `markdown-it`, LaTeX via `lib/latex.mjs` —
-   pre-rendering math with KaTeX so **no client-side math JS is needed**.
-4. Sorts posts newest-first and writes:
-   - `index.html` (the listing: full articles, with a table view of every post),
-     continuing at `page/<n>/index.html` once the articles outweigh one page
+2. **Reads the posts.** In order of precedence: `BLOG_POSTS_DIR` if it is set
+   (the test and local-fixture path), otherwise R2 if credentials are
+   configured, otherwise the filesystem — which in a clean clone means no posts
+   at all. R2 posts come from `published/index.json` and the frozen revisions it
+   names; filesystem posts are `.md`/`.tex` files with `---` frontmatter, and
+   `draft: true` skips one.
+3. **Fetches and verifies media.** Every image a published revision names is
+   downloaded with bounded parallelism, checked against the SHA-256 recorded at
+   publish time, and cached by hash under `node_modules/.cache/weblog-media`,
+   which Vercel keeps between builds. A missing or mismatched file stops the
+   build before any page is written.
+4. Renders each body — Markdown via `markdown-it`, LaTeX via `lib/latex.mjs` —
+   pre-rendering math with KaTeX so **no client-side math JavaScript is needed**.
+5. Sorts posts newest-first and writes:
+   - `index.html`, the listing: full articles with a table view of every post,
+     continuing at `page/<n>/index.html` once one page's articles exceed about
+     350 KB of HTML
    - `<slug>/index.html` per post
-   - `tags/<slug>/index.html` per distinct tag (newest-first within each, paginated the same way)
+   - `tags/<slug>/index.html` per distinct tag, paginated the same way
    - `feed.xml`, `sitemap.xml` (posts **and** tag pages), `robots.txt`, `404.html`
-5. Copies static assets into `dist/`:
-   - `assets/styles/` → `styles/`
-   - `assets/images/` → `images/` (global media)
-   - `assets/posts/` → `assets/posts/` (per-post embeds)
-   - `assets/vendor/` → `assets/vendor/` (e.g. distill `template.v2.js`)
-   - `assets/blog.js`, `assets/favicon.svg`
-   - KaTeX `katex.min.css` → `styles/`, fonts → `styles/fonts/`
+   - `build-manifest.json`, naming the commit and every post revision this build
+     contains. The editor reads it back to decide what is actually live, so it
+     deliberately carries no timestamp.
+6. Copies static assets into `dist/`: `assets/styles/` → `styles/`,
+   `assets/images/` → `images/`, `assets/posts/` → `assets/posts/`,
+   `assets/vendor/` → `assets/vendor/`, `blog.js`/`editor.js`/`login.js` →
+   `assets/`, `favicon.svg`, and KaTeX's `katex.min.css` → `styles/` with its
+   fonts at `styles/fonts/`.
 
-`dist/` is gitignored; it is fully regenerated each build, locally and on Vercel.
+`dist/` is gitignored and fully regenerated on every build, locally and on Vercel.
+
+### Building without R2
+
+To build a set of posts with no credentials, keep them outside the repository
+and point the build at them (a tripwire test fails if posts or images reappear
+inside the repository):
+
+```bash
+BLOG_POSTS_DIR=/tmp/posts BLOG_DIST_DIR=/tmp/dist npm run build
+```
+
+Each file there is `.md` or `.tex` with a YAML block at the top:
+
+```yaml
+---
+title: "Post title"           # required
+date: 2026-06-25              # required
+description: "1–2 line summary"
+tags: [machine-learning, vision]
+slug: custom-slug             # otherwise derived from the filename
+draft: true                   # excluded from the build
+---
+```
+
+These files are treated as repository-authored and trusted, so they may use the
+legacy embed hooks described in [README.md](README.md). Posts published from the
+browser never can.
 
 ---
 
-## 2. Create the Vercel project
+## 2. Create the R2 bucket
 
-1. Go to <https://vercel.com/new>.
-2. **Import** the `website-blog` git repository.
-3. When prompted for **Framework Preset**, choose **Other** (this is a custom
-   static generator, not a known framework).
-4. Set the build settings exactly:
+1. In the Cloudflare dashboard, open **R2** and create a bucket named
+   `weblog-data`. Leave **public access** and `r2.dev` access **disabled**: the
+   build reads it with credentials, and readers only ever see files Vercel
+   serves.
+2. Create an **API token** scoped to **Object Read & Write** on this bucket
+   only. Record its access key id, secret access key and your account id.
+3. Add a **CORS policy** (R2 → `weblog-data` → Settings → CORS policy). Browsers
+   upload attachments straight to presigned R2 URLs, so without this every
+   upload fails at the preflight. The API token cannot set CORS; this is a
+   dashboard step:
 
-   | Setting              | Value             |
-   | -------------------- | ----------------- |
-   | **Build Command**    | `npm run build`   |
-   | **Output Directory** | `dist`            |
-   | **Install Command**  | `npm install`     |
-   | **Root Directory**   | `./` (repo root)  |
+   ```json
+   [{"AllowedOrigins":["https://blog.souravmishra.net"],
+     "AllowedMethods":["PUT"],
+     "AllowedHeaders":["content-type"],
+     "MaxAgeSeconds":3600}]
+   ```
 
-5. Click **Deploy**. The first build runs `npm install` then `npm run build`,
-   and Vercel serves the generated `dist/` directory.
+   Add any other origin you will run the editor from — a preview deployment or
+   `http://localhost:4321` — as its own entry.
+4. Add two **object lifecycle rules** (Settings → Object Lifecycle Rules), each
+   deleting objects **1 day after upload**, for the prefixes
+   `prod/rate-limits/` and `prod/sessions/`. These records expire on every read
+   regardless, so the rules are housekeeping rather than a safety control; the
+   application's token cannot manage them, so they too are a dashboard step.
+   Deleting the sessions prefix signs the owner out.
 
-`vercel.json` (already in the repo) supplies clean URLs, trailing slashes, and
-long-lived **immutable** cache headers for fonts (`/styles/fonts/*`) and KaTeX
-CSS (`/styles/katex.min.css`) — those filenames are stable, so caching them hard
-is safe. No extra dashboard config is needed.
+Everything in the bucket lives under a prefix — `prod` in production, `dev`
+locally — so local work cannot touch published data. The prefix is
+organizational only: a bucket-scoped credential reaches every prefix.
 
-> **Images and `blog.js` are not content-hashed**, so they are served with
-> Vercel's default caching (no `immutable` rule). If you replace an image under
-> the same name, expect normal CDN cache behavior. To force a hard refresh, use
-> a new filename or add a query string when referencing it.
+To confirm the bucket behaves as the design assumes, run the capability probe
+once (it works under a throwaway prefix and cleans up after itself):
+
+```bash
+node --env-file=.env scripts/probe-r2.mjs
+```
 
 ---
 
-## 3. Point domain at the project
+## 3. Set the editor password
+
+```bash
+node scripts/set-password.mjs
+```
+
+It prompts twice with echo off, refuses to read from a pipe, and prints a
+versioned scrypt hash. Paste that into the Vercel project as
+`ADMIN_PASSWORD_HASH`. The password itself is never an argument, so it never
+reaches shell history, the process list, or a log.
+
+---
+
+## 4. Create the Vercel project
+
+1. Go to <https://vercel.com/new> and **import** the repository.
+2. For **Framework Preset**, choose **Other** — this is a custom static
+   generator.
+3. Leave the build settings alone. `vercel.json` already declares the build
+   command (`npm run build`), the output directory (`dist`), clean URLs,
+   trailing slashes, the `/editor/` and `/login/` rewrites, and the cache
+   headers, so a new project needs no dashboard configuration.
+4. Add the environment variables below, **scoped to Production only**. Preview
+   and Development deployments then hold no credential at all and build an empty
+   site, which is what keeps branch deployments away from production data. Keep
+   it that way when adding a variable.
+
+| Variable | Required | Notes |
+| -------- | -------- | ----- |
+| `R2_ACCOUNT_ID` | Yes | Cloudflare account id. |
+| `R2_BUCKET` | No | Defaults to `weblog-data`. |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Yes | The R2 token. `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` are accepted as aliases. |
+| `R2_PREFIX` | Yes | `prod` in production. Defaults to `dev`. |
+| `R2_ENDPOINT` | No | Derived from the account id. |
+| `ADMIN_PASSWORD_HASH` | Yes | From step 3. Changing it sets a new password **and** ends every session. |
+| `AUTH_VERSION` | No | Bump it to revoke every session without changing the password. |
+| `RATE_LIMIT_HASH_SECRET` | Yes | Hashes client identifiers in rate-limit keys and signs the device cookie. Rotating it forgets every known browser. |
+| `SITE_URL` | No | The origin the editor accepts requests from, and the site whose build manifest decides live status. Defaults to `https://blog.souravmishra.net` in production. |
+| `EDITOR_ORIGIN` | No | An additional exact origin allowed to call the API. |
+| `VERCEL_DEPLOY_HOOK_URL` | Yes | Fired after publish, unpublish, rollback and Rebuild site. **A secret**: anyone holding it can trigger builds. Absent means the hook is skipped and nothing rebuilds. |
+| `PUBLISH_ENABLED` | No | `"false"` refuses publish, unpublish, rollback and rebuild while still listing publications. |
+
+5. Create the deploy hook: **Settings → Git → Deploy Hooks**, targeting the
+   production branch (`main`). Copy the URL into `VERCEL_DEPLOY_HOOK_URL`.
+   Vercel allows 60 hook calls an hour per project, and calling the hook again
+   while a build from the same commit runs cancels the earlier deployment —
+   which is how a burst of publishes collapses into one build.
+6. Deploy. The first build runs `npm install`, then `npm run build`.
+
+Locally, the same variables live in a gitignored `.env`, and scripts read it
+with `node --env-file=.env`. Nothing env-shaped is committed.
+
+---
+
+## 5. Point a domain at the project
 
 1. In the Vercel project, open **Settings → Domains**.
 2. Add the domain: `blog.souravmishra.net`.
-3. Vercel will show the DNS record to create. Add it wherever DNS for
-   `souravmishra.net` is managed:
+3. Add the DNS record Vercel shows, wherever DNS for `souravmishra.net` is
+   managed:
 
-   | Type    | Name   | Value                  |
-   | ------- | ------ | ---------------------- |
+   | Type | Name | Value |
+   | ---- | ---- | ----- |
    | `CNAME` | `blog` | `cname.vercel-dns.com` |
 
    (Use the exact target Vercel displays — it is occasionally different.)
-4. Wait for DNS to propagate; Vercel auto-provisions HTTPS once it verifies the
-   record. The status in **Settings → Domains** turns to **Valid**.
+4. Wait for DNS to propagate; Vercel provisions HTTPS once it verifies the
+   record, and **Settings → Domains** turns **Valid**.
 
-> **After the domain is live**, confirm `SITE.url` in `lib/templates.mjs` matches
-> the final origin (currently `https://blog.souravmishra.net`). It drives
-> canonical URLs, Open Graph tags, the RSS feed, and the sitemap. If you change
-> it, commit and push to trigger a rebuild.
+> **If the origin changes, three things move together:** `SITE.url` in
+> [lib/templates.mjs](lib/templates.mjs), which drives canonical URLs, Open
+> Graph tags, the feed and the sitemap; `SITE_URL` in the Vercel project, which
+> sets the origin the editor accepts requests from and the site the editor reads
+> live status back from; and the allowed origin in the R2 bucket's CORS rule.
+> Changing `SITE.url` needs a commit and a push.
 
----
-
-## 4. Verify the deployment
-
-Once deployed, check:
-
-- `https://blog.souravmishra.net/` — the listing shows full articles newest-first,
-  styled like the main site (fonts, colors, nav, footer). **Table** switches to a
-  compact table with clickable rows, and the choice survives a reload.
-- Open a post — math, highlighted code, and heading anchors render. **Disable
-  JavaScript and reload**: the math is still there (pre-rendered at build).
-- Click a **tag chip** — `/tags/<slug>/` lists only posts with that tag,
-  newest-first.
-- A `.tex`-sourced post renders headings, lists, and KaTeX math like a Markdown
-  post.
-- `https://blog.souravmishra.net/feed.xml` and `/sitemap.xml` load as valid XML
-  (the sitemap includes `/tags/<slug>/` URLs).
+Note that a Vercel project with SSO protection set to "all except custom
+domains" leaves the custom domain public while `*.vercel.app` stays gated —
+which is what lets the editor read the public build manifest back.
 
 ---
 
-## 5. Day-to-day publishing
+## 6. Verify the deployment
 
-1. Add a `.md` or `.tex` file to `content/posts/` (see [README.md](README.md) for
-   the frontmatter contract). Add any images to `assets/images/`.
-2. Optionally `npm run dev` to preview at <http://localhost:4321> before pushing.
-3. Commit and push.
-4. Vercel rebuilds and deploys automatically — no dashboard steps, no code
-   changes.
+Public site:
+
+- `https://blog.souravmishra.net/` — the listing shows full articles
+  newest-first, styled like the main site. **Table** switches to a compact table
+  of every post, and the choice survives a reload.
+- Open a post — math, highlighted code and heading anchors render. **Disable
+  JavaScript and reload**: the math is still there, pre-rendered at build time,
+  and the feed still reads.
+- Click a **tag chip** — `/tags/<slug>/` lists only that tag's posts.
+- `/feed.xml` and `/sitemap.xml` load as valid XML, the sitemap including tag
+  pages.
+- `/build-manifest.json` names the commit and the revisions this build contains.
+
+Editor:
+
+- `/login/` accepts the password and redirects to `/editor/`; a wrong password
+  is refused without saying why.
+- `/editor/` signed out redirects to `/login/`, and `/api/drafts/` answers 401
+  with no session.
+- An attachment uploads, previews and publishes. If the upload fails at the
+  preflight, the R2 CORS rule in step 2 is missing or names the wrong origin.
 
 ---
 
-## 6. Troubleshooting
+## 7. Day-to-day publishing
 
-| Symptom                                              | Cause & fix                                                                                          |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Build error: `katex.min.css not found`               | Dependencies not installed in the build env. Run/ensure `npm install` runs before `npm run build`.   |
-| A post doesn't appear                                | It has `draft: true` (intentional), or the build skipped it — check the build log.                   |
-| Build aborts: *missing required frontmatter*         | The post lacks `title` or `date`. Both are mandatory for `.md` **and** `.tex`.                        |
-| Math shows as raw `$…$` text                          | The expression failed to parse. KaTeX runs with `throwOnError: false`, so check the source delimiters. |
-| LaTeX image doesn't load                             | `\includegraphics{name}` had no extension, or the path isn't `/images/<file>`. Use `/images/foo.png`. |
-| `.tex` heading looks too small                       | `\section` maps to `<h3>` by design (`unified-latex`). Cosmetic; use as-is or adjust in `lib/latex.mjs`. |
-| Styles look wrong after a main-site redesign         | Re-mirror tokens/chrome — see **Design parity** in [README.md](README.md).                            |
-| Old image still served after replacing it            | Non-hashed assets follow CDN caching. Use a new filename or a cache-busting query string.             |
+There is no repository step and no terminal step.
+
+1. Sign in at **`/login/`**, write at **`/editor/`**.
+2. Fill in title, date and format; slug, description and tags are optional.
+   Attach images or `.tex` snippets with the attach button, by pasting, or by
+   dropping them on the page. Each attachment's reference is inserted on a line
+   of its own.
+3. **Preview** renders the fields as they would publish, in a sandboxed frame.
+   Its errors are exactly what publishing would refuse; render warnings — an
+   unsupported LaTeX command, a formula that did not parse — never block
+   publishing.
+4. **Save**, then **Publish**. Publishing freezes the saved revision into R2,
+   updates the published index, and fires the deploy hook.
+5. **On the site** reads the live build manifest back and reports Live, Not live
+   yet, Updating, Coming down, Unpublished or Not checked. It keeps checking —
+   after 4 seconds, then less often, up to every 30 seconds — and after 15
+   minutes says the build may have failed.
+
+From the same panel: **Unpublish** takes a post off the site while keeping its
+revisions, **Roll back** (or **Put back**) puts a stored revision on the site,
+and **Rebuild site** fires the deploy hook without changing anything — that
+button pauses 30 seconds after a click, to stay inside Vercel's hourly limit.
+
+Pushing to `main` rebuilds the engine with the same content; publishing rebuilds
+the same engine with new content. Both go through the same build.
+
+---
+
+## 8. Operations
+
+### Inventory and garbage collection
+
+```bash
+node --env-file=.env scripts/inventory.mjs               # print the tree
+node --env-file=.env scripts/inventory.mjs --gc          # what would be swept
+node --env-file=.env scripts/inventory.mjs --gc --apply  # sweep
+```
+
+`inventory.json` is derived from the bucket on every run, never maintained
+incrementally. Collection is scoped to one post at a time by the post id in
+every key, is dry by default, and never touches the current published revision,
+the current draft, or anything younger than an hour. Retention: superseded
+published revisions 90 days (the rollback window), draft history 30 days or 20
+revisions per post, unattached uploads 24 hours. It also runs automatically
+after publish, unpublish, rollback and draft discard, and never throws.
+
+Two things it deliberately does **not** collect: expired sessions and
+rate-limit windows, which the R2 lifecycle rules in step 2 delete; and
+publication job records under `<prefix>/publications/`, which currently have no
+retention rule at all and accumulate.
+
+### Backups
+
+Git holds no content, so R2 is the only copy. Take dated backups with a
+**separate read-only** R2 token that never goes into Vercel:
+
+```bash
+rclone copy r2:weblog-data/prod ./backup/prod-$(date +%F)
+```
+
+### Rotating credentials
+
+| To do this | Do this |
+| ---------- | ------- |
+| Change the password | `node scripts/set-password.mjs`, then update `ADMIN_PASSWORD_HASH`. Every session ends. |
+| Revoke every session, keeping the password | Bump `AUTH_VERSION`. |
+| Rotate the R2 token | Create the new token, update both `R2_*` variables, redeploy, then delete the old token. |
+| Rotate the deploy hook | Delete it in **Settings → Git → Deploy Hooks**, create another, update `VERCEL_DEPLOY_HOOK_URL`. |
+| Rotate `RATE_LIMIT_HASH_SECRET` | Set a new value. Every browser's device cookie stops counting separately, so signed-in browsers fall back to the per-address budget. |
+
+### Locked out of login
+
+Five failed attempts from one address, or 50 anonymous attempts in total,
+exhaust a 15-minute window. **The ordinary recovery is to wait**: the window
+expires on its own. A browser that has signed in before carries a signed device
+cookie and has its own budget of five, so other people's failures cannot lock it
+out. In an emergency, changing `ADMIN_PASSWORD_HASH` sets a new password and
+ends every session. There is no bypass secret, deliberately — it would be a
+second credential of equal power that never gets rotated.
+
+### Sessions
+
+Idle timeout is 8 hours, refreshed on activity, with a hard 7-day ceiling.
+Expiry is enforced on every read, so a record that outlives its deadline never
+authenticates even if cleanup has not run.
+
+### A failed build
+
+Vercel keeps the previous deployment serving, and the draft and publication job
+both survive. Publish again to re-fire only the hook, or use **Rebuild site**.
+The editor cannot currently name a build as failed — it says nothing has landed
+after 15 minutes and points at the Vercel dashboard, which holds the build log.
+
+---
+
+## 9. Verification scripts
+
+`npm test` runs the whole suite with no credentials. Beyond it:
+
+```bash
+node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
+node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
+node scripts/verify-editor.mjs           # the On the site panel, against a stand-in site
+```
+
+Those drive Chromium over the DevTools protocol; set `CHROMIUM` if the binary is
+not `chromium-browser`. The scripts below touch the **live** bucket, need
+credentials, and are run by hand. Each works under a throwaway prefix and cleans
+up after itself:
+
+```bash
+node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
+node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
+node --env-file=.env scripts/verify-publish.mjs  # publish, unpublish, roll back, build
+node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
+```
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | Cause and fix |
+| ------- | ------------- |
+| Build error: `katex.min.css not found` | Dependencies not installed in the build environment. Ensure `npm install` runs before `npm run build`. |
+| The site builds but is **empty** | No R2 credentials in that environment, or nothing published. A credential-less build produces an empty site by design; check the build log's `content:` line. |
+| Build aborts: *Media error* | A published revision names an image that is missing from R2 or whose bytes no longer match its recorded hash. The build refuses rather than shipping a broken page. |
+| Build aborts: *Content error* | A post failed validation — a missing title or date, an unparseable date, a reserved or duplicate slug. The message names the post. |
+| A post doesn't appear | It was never published (a saved draft is not published), or it is unpublished. Check **On the site** in the editor, and `/build-manifest.json`. |
+| Publish succeeds but the post is not live | The rebuild has not landed, or the deploy hook is unset or failed. The panel distinguishes them; **Rebuild site** re-fires the hook. |
+| Attachment upload fails immediately | The R2 CORS rule is missing, or does not name the exact origin the editor is served from (step 2). |
+| Publishing under a new slug is refused | A published post's slug is fixed. Unpublish it first, or keep the slug. |
+| Discarding a draft is refused | Its post is still published; the draft and the published copy share a post id. Unpublish first. |
+| Login returns 429 | The rate-limit window. Wait it out, or rotate `ADMIN_PASSWORD_HASH`; see §8. |
+| `/api/…` returns 403 with no obvious cause | The request's `Origin` did not match exactly, or its CSRF token was missing. Origins are matched exactly, never by suffix. |
+| Math shows as raw `$…$` text | The expression failed to parse. KaTeX runs with `throwOnError: false`; check the delimiters, and the preview warnings. |
+| `.tex` heading looks too small | `\section` maps to `<h3>` by `unified-latex` default. Cosmetic; adjust in `lib/latex.mjs` if it matters. |
+| Styles look wrong after a main-site redesign | Re-mirror tokens and chrome — see **Design parity** in [README.md](README.md). |
+| An old image is still served after replacing it | Published images are revalidated rather than immutable, but CDN and browser caches still apply. Attachment names are never reused within a post, so a replaced image normally gets a new name. |
 
 ---
 
@@ -158,13 +402,18 @@ Once deployed, check:
 
 Installed by `npm install`; pinned in `package.json`:
 
-- `markdown-it` + `markdown-it-anchor` + `markdown-it-texmath` — Markdown + anchors + math delimiters
-- `katex` — build-time math rendering (and the CSS/fonts copied into `dist/`)
+- `markdown-it` + `markdown-it-anchor` + `markdown-it-texmath` — Markdown,
+  anchors and math delimiters
+- `katex` — build-time math rendering, and the CSS and fonts copied into `dist/`
 - `highlight.js` — build-time code highlighting
-- `gray-matter` — `---` YAML frontmatter parsing (works on `.md` and `.tex`)
-- `unified` + `rehype-stringify` + `@unified-latex/unified-latex-util-parse` +
-  `@unified-latex/unified-latex-to-hast` — pure-JS LaTeX → HTML pipeline
+- `gray-matter` — `---` YAML frontmatter parsing, for filesystem builds
+- `unified` + `rehype-stringify` +
+  `@unified-latex/unified-latex-util-parse` + `@unified-latex/unified-latex-to-hast`
+  — the pure-JavaScript LaTeX → HTML pipeline
+- `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` — R2 over its
+  S3-compatible API, including presigned upload URLs
 
-The only runtime asset shipped to browsers is the small `assets/blog.js`
-(mobile nav, feed/table switch, clickable rows, scroll reveal) plus any per-post embeds you add —
-there is no framework runtime.
+The only runtime assets shipped to readers are the small `assets/blog.js`
+(mobile nav, feed/table switch, clickable rows, scroll reveal) and any per-post
+embeds; `editor.js` and `login.js` load only on the authenticated pages. There is
+no framework runtime.
