@@ -37,7 +37,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * Exits 2 — never 1, and never a pass — when the browser cannot start, so a
  * check that did not run is distinguishable from one that failed.
  */
-export async function startDevTools(profile, { waitMs = 20_000 } = {}) {
+export async function startDevTools(profile, { waitMs = 60_000 } = {}) {
   const args = [
     ...BASE_FLAGS,
     `--user-data-dir=${profile}`, "--remote-debugging-port=0",
