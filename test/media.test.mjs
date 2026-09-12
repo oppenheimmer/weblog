@@ -4,13 +4,17 @@
 // parser tested only against buffers its own author wrote proves nothing beyond
 // self-consistency.
 //
-// WebP is the exception and is worth naming: no WebP encoder was available on
-// this machine, so the cases below build headers by hand. The parser was
-// separately checked against real WebP files of all three chunk types —
-// including a VP8 image of known 10800x5400 ground truth, and VP8X files whose
-// canvas size was cross-checked against the dimensions in their own embedded
-// VP8/VP8L subchunk. VP8L was only confirmed self-consistent, so it is the
-// weakest link here.
+// WebP was the exception for a while: with no encoder on the machine, its
+// cases were hand-built headers, and VP8L — the lossless form, whose two
+// dimensions are packed into one little-endian word — was only ever confirmed
+// self-consistent. It is now real `cwebp` output, and the ground truth is
+// independent of the encoder that produced it: each fixture was decoded back
+// to PNG with `dwebp` and its dimensions read from the PNG header, which is a
+// different program reading a different format.
+//
+// VP8X is still hand-built. Neither `webpmux` nor an ffmpeg WebP encoder was
+// available to produce an extended file, so that one case remains what it was,
+// and this comment is the record of which is which.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -78,6 +82,30 @@ test("WebP lossy (VP8) dimensions are read from the frame header", () => {
   assert.equal(found?.format, "webp");
   assert.equal(found.width, 17);
   assert.equal(found.height, 6);
+});
+
+test("WebP lossless (VP8L) dimensions come out of real encoder output", () => {
+  // Two 14-bit fields packed into one little-endian word is the easiest place
+  // in this parser to be self-consistently wrong: shift or mask the pair the
+  // same way in both directions and a hand-built fixture agrees with you.
+  // These are real files, and both are asymmetric, so a width/height swap has
+  // nowhere to hide.
+  for (const [name, width, height] of [
+    ["sample-23x6-lossless.webp", 23, 6],
+    ["sample-41x17-lossless.webp", 41, 17],
+  ]) {
+    const found = sniffImage(fs.readFileSync(path.join(MEDIA, name)));
+    assert.equal(found?.format, "webp", name);
+    assert.equal(found.mediaType, "image/webp", name);
+    assert.equal(found.extension, "webp", name);
+    assert.equal(`${found.width}x${found.height}`, `${width}x${height}`, name);
+  }
+});
+
+test("WebP lossy (VP8) dimensions come out of real encoder output too", () => {
+  const found = sniffImage(fs.readFileSync(path.join(MEDIA, "sample-41x17-lossy.webp")));
+  assert.equal(found?.format, "webp");
+  assert.equal(`${found.width}x${found.height}`, "41x17");
 });
 
 test("WebP lossless (VP8L) dimensions are read from packed 14-bit fields", () => {
