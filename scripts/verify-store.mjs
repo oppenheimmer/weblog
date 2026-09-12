@@ -9,9 +9,17 @@ import crypto from "node:crypto";
 import { createStore, ConflictError } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { loadR2Config } from "../lib/server/config.mjs";
+import { probePrefix, cleanUpOnExit, sweepStaleProbes } from "./probe-prefix.mjs";
 
-const config = { ...loadR2Config(), prefix: `probe-store-${crypto.randomBytes(4).toString("hex")}` };
+const config = { ...loadR2Config(), prefix: probePrefix("store") };
 const store = createStore({ config });
+// Cleanup no longer waits for the script to finish: Ctrl-C and an escaping
+// exception both sweep this run's prefix on the way out (scripts/probe-prefix.mjs).
+const sweep = cleanUpOnExit(store, { label: config.prefix });
+// Debris an earlier interrupted run could not sweep itself. Older than an hour
+// only, so a check running right now keeps its working set.
+const abandoned = await sweepStaleProbes(config);
+if (abandoned) console.log(`Removed ${abandoned} object(s) left by an earlier interrupted run.\n`);
 const results = [];
 
 async function check(name, fn) {
@@ -163,9 +171,11 @@ await check("revisions list in chronological order", async () => {
 
 // ---- cleanup ---------------------------------------------------------------
 console.log("\nCleaning up...");
-const leftover = await store.listAll("");
-for (const { key } of leftover) await store.delete(key);
-console.log(`Deleted ${leftover.length} objects.`);
+console.log(`Deleted ${await sweep()} objects.`);
+// Debris from a run that was interrupted before it could tidy up. Older than
+// an hour only, so a check running alongside this one keeps its working set.
+const stale = await sweepStaleProbes(config);
+if (stale) console.log(`Also removed ${stale} object(s) left by an earlier interrupted run.`);
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} store checks passed`);

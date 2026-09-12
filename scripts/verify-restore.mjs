@@ -26,6 +26,7 @@ import { createPublisher } from "../lib/server/publish.mjs";
 import { createUploads } from "../lib/server/uploads.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
 import { loadR2Config } from "../lib/server/config.mjs";
+import { probePrefix, cleanUpOnExit, sweepStaleProbes } from "./probe-prefix.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const keepBackup = process.argv.includes("--keep");
@@ -35,9 +36,8 @@ const keepBackup = process.argv.includes("--keep");
 const control = process.argv.includes("--control");
 
 const base = loadR2Config();
-const stamp = crypto.randomBytes(4).toString("hex");
-const LIVE = `probe-restore-${stamp}`;        // stands in for prod/
-const ELSEWHERE = `probe-restored-${stamp}`;  // restoring to a different prefix
+const LIVE = probePrefix("restore");        // stands in for prod/
+const ELSEWHERE = probePrefix("restored");  // restoring to a different prefix
 
 // The one thing this script must never do.
 for (const prefix of [LIVE, ELSEWHERE]) {
@@ -48,6 +48,10 @@ for (const prefix of [LIVE, ELSEWHERE]) {
 }
 
 const store = createStore({ config: { ...base, prefix: LIVE } });
+const restoredStore = createStore({ config: { ...base, prefix: ELSEWHERE } });
+// Both prefixes go, however this script ends (scripts/probe-prefix.mjs).
+const sweepLive = cleanUpOnExit(store, { label: LIVE });
+const sweepRestored = cleanUpOnExit(restoredStore, { label: ELSEWHERE });
 const drafts = createDraftStore(store);
 const uploads = createUploads(store, { signPut: async (key) => `https://unused/${key}` });
 const publisher = createPublisher(store, { fireDeployHook: async () => ({ stubbed: true }) });
@@ -231,8 +235,7 @@ await check("rclone restores the backup into a different prefix", async () => {
   // A different prefix on purpose: a real recovery may go to a new bucket, and
   // nothing in the data may depend on where it used to live.
   rclone("copy", backupDir, `R2:${base.bucket}/${ELSEWHERE}`, "--transfers", "8");
-  const restored = createStore({ config: { ...base, prefix: ELSEWHERE } });
-  const keys = (await restored.listAll("")).map((o) => o.key);
+  const keys = (await restoredStore.listAll("")).map((o) => o.key);
   assert(keys.length === liveKeys.length, `restored ${keys.length} of ${liveKeys.length} objects`);
 });
 
@@ -256,8 +259,7 @@ await check("the restored image is byte-identical, not merely present", async ()
 });
 
 await check("drafts and superseded revisions came back too, not just what was live", async () => {
-  const restored = createStore({ config: { ...base, prefix: ELSEWHERE } });
-  const keys = (await restored.listAll("")).map((o) => o.key);
+  const keys = (await restoredStore.listAll("")).map((o) => o.key);
   assert(keys.some((k) => /^drafts\/.*\/current\.json$/.test(k)), "no draft pointer was restored");
   const revisions = keys.filter((k) => /^published\/posts\//.test(k));
   assert(revisions.length >= 3, `expected the superseded revision too, found ${revisions.length}`);
@@ -266,12 +268,9 @@ await check("drafts and superseded revisions came back too, not just what was li
 // ---- cleanup ----------------------------------------------------------------
 
 console.log("\nCleaning up...");
-let removed = 0;
-for (const prefix of [LIVE, ELSEWHERE]) {
-  const s = createStore({ config: { ...base, prefix } });
-  for (const { key } of await s.listAll("")) { await s.delete(key); removed++; }
-}
-console.log(`Deleted ${removed} objects from the two throwaway prefixes.`);
+console.log(`Deleted ${await sweepLive() + await sweepRestored()} objects from the two throwaway prefixes.`);
+const stale = await sweepStaleProbes(base);
+if (stale) console.log(`Also removed ${stale} object(s) left by an earlier interrupted run.`);
 if (keepBackup) {
   console.log(`Backup kept at ${backupDir}`);
   fs.rmSync(distBefore, { recursive: true, force: true });

@@ -26,6 +26,7 @@ import { syncPublishedMedia } from "../lib/server/media-sync.mjs";
 import { buildInventory } from "../lib/server/inventory.mjs";
 import { keys, classifyKey } from "../lib/server/keys.mjs";
 import { loadR2Config } from "../lib/server/config.mjs";
+import { probePrefix, cleanUpOnExit, sweepStaleProbes } from "./probe-prefix.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PNG = fs.readFileSync(path.join(ROOT, "test", "fixtures", "media", "sample-7x11.png"));
@@ -36,8 +37,15 @@ const SVG = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1
 const SITE_ORIGIN = "https://blog.souravmishra.net";
 const sha = (buffer) => crypto.createHash("sha256").update(buffer).digest("hex");
 
-const config = { ...loadR2Config(), prefix: `probe-up-${crypto.randomBytes(4).toString("hex")}` };
+const config = { ...loadR2Config(), prefix: probePrefix("up") };
 const store = createStore({ config });
+// Cleanup no longer waits for the script to finish: Ctrl-C and an escaping
+// exception both sweep this run's prefix on the way out (scripts/probe-prefix.mjs).
+const sweep = cleanUpOnExit(store, { label: config.prefix });
+// Debris an earlier interrupted run could not sweep itself. Older than an hour
+// only, so a check running right now keeps its working set.
+const abandoned = await sweepStaleProbes(config);
+if (abandoned) console.log(`Removed ${abandoned} object(s) left by an earlier interrupted run.\n`);
 const drafts = createDraftStore(store);
 const uploads = createUploads(store);
 const publisher = createPublisher(store, { fireDeployHook: async () => ({ stubbed: true }), uploads });
@@ -176,9 +184,11 @@ const corsReady = allowed === SITE_ORIGIN || allowed === "*";
 
 // ---- cleanup ---------------------------------------------------------------
 console.log("\nCleaning up...");
-const leftover = await store.listAll("");
-for (const { key } of leftover) await store.delete(key);
-console.log(`Deleted ${leftover.length} objects.`);
+console.log(`Deleted ${await sweep()} objects.`);
+// Debris from a run that was interrupted before it could tidy up. Older than
+// an hour only, so a check running alongside this one keeps its working set.
+const stale = await sweepStaleProbes(config);
+if (stale) console.log(`Also removed ${stale} object(s) left by an earlier interrupted run.`);
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} upload checks passed`);
