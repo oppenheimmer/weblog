@@ -25,11 +25,12 @@ const param = (req, name) =>
 
 // `signPut` comes from the context only in tests, where there is no real
 // client to sign with; in production the store signs.
-export default route(async ({ req, res, requestId, store, signPut }) => {
+export default route(async ({ req, res, requestId, store, annotate, signPut }) => {
   const uploads = createUploads(store, signPut ? { signPut } : {});
   const interactives = createInteractives(store, signPut ? { signPut } : {});
 
   try {
+    annotate({ postId: param(req, "postId") });
     if (req.method === "GET") {
       if (param(req, "kind") === "interactive") {
         return sendJson(res, 200, { interactives: await interactives.list(param(req, "postId")) });
@@ -38,6 +39,7 @@ export default route(async ({ req, res, requestId, store, signPut }) => {
     }
     if (req.method === "DELETE") {
       const interactiveId = param(req, "interactiveId");
+      annotate({ action: "remove", interactiveId, attachmentId: param(req, "attachmentId") });
       if (interactiveId) {
         return sendJson(res, 200, await interactives.remove(param(req, "postId"), interactiveId));
       }
@@ -45,17 +47,26 @@ export default route(async ({ req, res, requestId, store, signPut }) => {
     }
 
     const body = await readJsonBody(req);
+    annotate({ action: body?.action, postId: body?.postId, uploadId: body?.uploadId });
     if (body?.action === "sign") {
-      return sendJson(res, 200, await uploads.sign(body));
+      const signed = await uploads.sign(body);
+      annotate({ uploadId: signed.uploadId, attachmentId: signed.attachmentId });
+      return sendJson(res, 200, signed);
     }
     if (body?.action === "complete") {
-      return sendJson(res, 200, { attachment: await uploads.complete(body) });
+      const attachment = await uploads.complete(body);
+      annotate({ attachmentId: attachment.id });
+      return sendJson(res, 200, { attachment });
     }
     if (body?.action === "begin-bundle") {
-      return sendJson(res, 200, await interactives.begin(body));
+      const agreed = await interactives.begin(body);
+      annotate({ interactiveId: agreed.interactiveId, bundleRevisionId: agreed.revisionId, uploadId: agreed.uploadId });
+      return sendJson(res, 200, agreed);
     }
     if (body?.action === "complete-bundle") {
-      return sendJson(res, 200, { interactive: await interactives.complete(body) });
+      const interactive = await interactives.complete(body);
+      annotate({ interactiveId: interactive.id, bundleRevisionId: interactive.revisionId });
+      return sendJson(res, 200, { interactive });
     }
     return sendError(res, 400, "unknown_action", "Say whether to sign or complete an upload.", { requestId });
   } catch (err) {

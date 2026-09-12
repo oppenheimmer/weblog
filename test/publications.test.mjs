@@ -417,7 +417,7 @@ function routeHarness({ manifest = { ok: true, commit: "c1", posts: [] }, housek
   const { store, publisher, drafts } = harness({ housekeep });
   const sessions = createSessionStore(store, { authVersion: 1 });
   const hooks = [];
-  setContext({
+  setContext({ log: () => {},
     store, sessions,
     limiter: createRateLimiter(store, { secret: "test-secret" }),
     fireDeployHook: async () => { hooks.push(1); return { job: "d" }; },

@@ -290,7 +290,7 @@ const previewRoute = (await import("../api/preview/index.js")).default;
 async function routeHarness() {
   const h = harness();
   const sessions = createSessionStore(h.store, { authVersion: 1 });
-  setContext({
+  setContext({ log: () => {},
     store: h.store, sessions, signGet: h.signGet,
     limiter: createRateLimiter(h.store, { secret: "test-secret" }),
   });

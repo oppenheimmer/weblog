@@ -7,10 +7,12 @@ import { route, readJsonBody, sendJson, sendError } from "../../lib/server/http.
 
 // `signGet` comes from the context only in tests, where there is no real client
 // to sign with; in production the store signs.
-export default route(async ({ req, res, requestId, store, signGet }) => {
+export default route(async ({ req, res, requestId, store, annotate, signGet }) => {
   const previewer = createPreviewer(store, signGet ? { signGet } : {});
   try {
-    return sendJson(res, 200, await previewer.render(await readJsonBody(req)));
+    const body = await readJsonBody(req);
+    annotate({ postId: body?.postId });
+    return sendJson(res, 200, await previewer.render(body));
   } catch (err) {
     if (err instanceof PreviewError) {
       return sendError(res, err.status, err.code, err.message, {

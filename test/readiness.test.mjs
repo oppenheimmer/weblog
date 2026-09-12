@@ -217,7 +217,7 @@ test("a check writes nothing, and its only listings are the post's attachments a
 function routeHarness() {
   const h = harness();
   const sessions = createSessionStore(h.store, { authVersion: 1 });
-  setContext({ store: h.store, sessions, limiter: createRateLimiter(h.store, { secret: "readiness" }) });
+  setContext({ log: () => {}, store: h.store, sessions, limiter: createRateLimiter(h.store, { secret: "readiness" }) });
   process.env.SITE_URL = "https://blog.example";
   return { ...h, sessions };
 }

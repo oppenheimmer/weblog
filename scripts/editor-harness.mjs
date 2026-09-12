@@ -51,7 +51,11 @@ export async function startEditorHarness({ shots = null } = {}) {
   const store = createStore({ config: FAKE_CONFIG, client: createFakeS3() });
   const hooks = [];
   const sessions = createSessionStore(store, { authVersion: 1 });
+  // Request logs are collected rather than printed, so a check can read every
+  // line a whole browser session produced (lib/server/log.mjs).
+  const logLines = [];
   setContext({
+    log: (line) => logLines.push(line),
     store,
     sessions,
     limiter: createRateLimiter(store, { secret: "verify-editor" }),
@@ -340,7 +344,7 @@ export async function startEditorHarness({ shots = null } = {}) {
   }
 
   return {
-    SITE, store, sessions, hooks, publisher, deployment, finishBuild, work,
+    SITE, store, sessions, hooks, publisher, deployment, finishBuild, work, logLines,
     openPage, check, results, scriptErrors, serverErrors, shutdown, finish,
   };
 }

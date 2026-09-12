@@ -329,7 +329,7 @@ async function routeHarness() {
 
   const sessions = createSessionStore(store, { authVersion: 1 });
   const limiter = createRateLimiter(store, { secret: "test-secret" });
-  setContext({ store, sessions, limiter, signPut });
+  setContext({ log: () => {}, store, sessions, limiter, signPut });
   const { token, session } = await sessions.create();
 
   const call = async ({ method = "GET", url = "/api/uploads/", body, auth = true, csrf = true } = {}) => {

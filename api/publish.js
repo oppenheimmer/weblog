@@ -19,7 +19,7 @@ import { route, readJsonBody, sendJson, sendError } from "../lib/server/http.mjs
 // `fireDeployHook`, `readManifest` and `housekeep` come from the context only in
 // tests; in production the real hook fires, the real site is read, and the real
 // sweep runs.
-export default route(async ({ req, res, requestId, store, fireDeployHook, housekeep,
+export default route(async ({ req, res, requestId, store, annotate, fireDeployHook, housekeep,
   readManifest = readSiteManifest }) => {
   const publisher = createPublisher(store, {
     ...(fireDeployHook ? { fireDeployHook } : {}),
@@ -45,6 +45,7 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, housek
 
     const body = await readJsonBody(req);
     const action = body?.action ?? "publish";
+    annotate({ action, postId: body?.postId });
 
     // Read-only, so it answers even where publishing is disabled — and says so.
     // The fields are the ones on screen, as preview takes them, because Publish
@@ -77,7 +78,10 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, housek
       return sendError(res, 400, "post_required", "Which post?", { requestId });
     }
     if (action === "unpublish") return sendJson(res, 200, await publisher.unpublish(postId));
-    if (action === "rollback") return sendJson(res, 200, await publisher.rollback(postId, body.revisionId));
+    if (action === "rollback") {
+      annotate({ revisionId: body.revisionId });
+      return sendJson(res, 200, await publisher.rollback(postId, body.revisionId));
+    }
     if (action !== "publish") {
       return sendError(res, 400, "unknown_action",
         "Say whether to publish, unpublish, roll back or rebuild.", { requestId });
@@ -90,6 +94,7 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, housek
       // once rather than twice.
       idempotencyKey: body.idempotencyKey || `${postId}:${found.draft.revisionId}`,
     });
+    annotate({ jobId: job.jobId, revisionId: job.revisionId });
     return sendJson(res, 200, { job, url: `/${found.draft.slug}/` });
   } catch (err) {
     if (err instanceof PublishError || err instanceof DraftError) {

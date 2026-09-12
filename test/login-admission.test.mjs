@@ -55,7 +55,7 @@ function burstClient(size) {
 
 test("a synchronized burst of wrong passwords runs the password check no more than the limit", async () => {
   const store = createStore({ config: FAKE_CONFIG, client: burstClient(12) });
-  setContext({
+  setContext({ log: () => {},
     store,
     sessions: createSessionStore(store, { authVersion: 1 }),
     limiter: createRateLimiter(store, { secret: "test-secret" }),

@@ -39,7 +39,7 @@ function harness() {
   const store = createStore({ config: FAKE_CONFIG, client });
   const sessions = createSessionStore(store, { authVersion: 1 });
   const limiter = createRateLimiter(store, { secret: "test-secret" });
-  setContext({ store, sessions, limiter });
+  setContext({ log: () => {}, store, sessions, limiter });
   return { store, sessions, limiter, drafts: createDraftStore(store) };
 }
 
@@ -143,7 +143,7 @@ test("a correct password mints a session cookie, a device cookie and a CSRF toke
 test("a browser that signed in before can still sign in while a spray has spent the shared budget", async () => {
   // Appendix C, F-02: anonymous failures used to refuse every login, the owner's included.
   const store = createStore({ config: FAKE_CONFIG, client: createFakeS3() });
-  setContext({
+  setContext({ log: () => {},
     store,
     sessions: createSessionStore(store, { authVersion: 1 }),
     limiter: createRateLimiter(store, { secret: "test-secret", maxGlobal: 3 }),

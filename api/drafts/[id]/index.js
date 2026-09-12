@@ -10,10 +10,11 @@ import { createDraftStore } from "../../../lib/server/drafts.mjs";
 import { ConflictError } from "../../../lib/server/r2.mjs";
 import { route, readJsonBody, sendJson, sendError } from "../../../lib/server/http.mjs";
 
-export default route(async ({ req, res, requestId, store }) => {
+export default route(async ({ req, res, requestId, store, annotate }) => {
   const drafts = createDraftStore(store);
   const postId = req.query?.id
     ?? new URL(req.url, "http://x").pathname.split("/").filter(Boolean).pop();
+  annotate({ postId });
 
   if (req.method === "GET") {
     const found = await drafts.get(postId);
@@ -38,6 +39,7 @@ export default route(async ({ req, res, requestId, store }) => {
 
   try {
     const saved = await drafts.save(postId, body ?? {}, etag);
+    annotate({ action: "save", revisionId: saved.draft.revisionId });
     res.setHeader("etag", saved.etag);
     return sendJson(res, 200, saved);
   } catch (err) {

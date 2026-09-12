@@ -465,7 +465,7 @@ async function routeHarness() {
   const h = await harness();
   const sessions = createSessionStore(h.store, { authVersion: 1 });
   const limiter = createRateLimiter(h.store, { secret: "test-secret" });
-  setContext({ store: h.store, sessions, limiter, signPut: h.signPut });
+  setContext({ log: () => {}, store: h.store, sessions, limiter, signPut: h.signPut });
   const { token, session } = await sessions.create();
   const call = async ({ method = "GET", url = "/api/uploads/", body, auth = true, csrf = true } = {}) => {
     const headers = { origin: ORIGIN };

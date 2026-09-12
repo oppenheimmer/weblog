@@ -23,7 +23,7 @@ const DIAGRAM = path.join(ROOT, "test/fixtures/assets/images/diagram.png");
 const TITLE = "Keyboard and assistive checks";
 
 const harness = await startEditorHarness();
-const { SITE, store, hooks, publisher, finishBuild, openPage, check, scriptErrors, serverErrors } = harness;
+const { SITE, store, hooks, publisher, finishBuild, openPage, check, scriptErrors, serverErrors, logLines } = harness;
 
 // The roles a person can operate. Each needs a name, or a screen reader
 // announces "button" and nothing else.
@@ -529,6 +529,7 @@ try {
 
   // ---- signing out --------------------------------------------------------------
   console.log("\nSigning out:");
+  const csrf = await page.eval(`fetch("/api/auth/session/").then((r) => r.json()).then((s) => s.csrfToken)`);
   const { cookies } = await page.send("Storage.getCookies", { browserContextId: page.browserContextId });
   const session = cookies.find((cookie) => cookie.name.startsWith("weblog_session"));
   await focusEnd("title");
@@ -553,6 +554,18 @@ try {
   await check("and the browser is sent back to sign in", async () =>
     (await page.until(`location.pathname === "/login/"`)) === true);
 
+  await check("no request log from the whole session carries a secret or the draft's text", async () => {
+    // Every line the server wrote while a person signed in with a password,
+    // uploaded on signed URLs and typed a draft.
+    const all = logLines.join("\n");
+    const leaked = [
+      ["the password", PASSWORD], ["the refused password", "not the password"],
+      ["the session cookie", session?.value], ["the CSRF token", csrf],
+      ["a signed upload URL", "local-upload"], ["the draft's text", "Opening line."], ["pasted text", "plain words"],
+    ].filter(([, secret]) => secret && all.includes(secret)).map(([what]) => what);
+    return (logLines.length > 50 && Boolean(session?.value) && Boolean(csrf) && leaked.length === 0) ||
+      { lines: logLines.length, leaked };
+  });
   await check("no script error was thrown", () => scriptErrors.length === 0 || scriptErrors);
   await check("no request failed inside the server", () => serverErrors.length === 0 || serverErrors);
 } finally {
