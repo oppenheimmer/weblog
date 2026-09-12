@@ -12,6 +12,7 @@ import {
   createPublisher, validateForPublish, contentDigest, PublishError, INDEX_KEY, revisionKey,
 } from "../lib/server/publish.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
+import { ContentError } from "../lib/content.mjs";
 import { createFakeS3, FAKE_CONFIG } from "./helpers/fake-r2.mjs";
 
 /** A publisher with a recording stand-in for the deploy hook. */
@@ -176,6 +177,39 @@ test("a validation failure writes no revision and no index entry", async () => {
 });
 
 // ---------------------------------------------------------------- build side
+
+test("an empty published index builds an empty blog", async () => {
+  const { store } = harness();
+  assert.deepEqual(await loadPublishedPosts({ store }), []);
+  await store.put(INDEX_KEY, JSON.stringify({ schemaVersion: 1, posts: {} }));
+  assert.deepEqual(await loadPublishedPosts({ store }), []);
+});
+
+test("a missing indexed revision fails the whole read instead of dropping its post", async () => {
+  const { publisher, store } = harness();
+  const missing = complete();
+  const healthy = complete({ postId: "p_00000000000000bb", slug: "healthy" });
+  await publisher.publish(missing);
+  await publisher.publish(healthy);
+  assert.equal((await loadPublishedPosts({ store })).length, 2);
+
+  const key = revisionKey(missing.postId, missing.revisionId);
+  const saved = await store.get(key);
+  await store.delete(key);
+  await assert.rejects(() => loadPublishedPosts({ store }), (err) => {
+    assert.ok(err instanceof ContentError);
+    assert.match(err.message, /missing/i);
+    assert.ok(err.message.includes(`/${missing.slug}/`));
+    assert.ok(err.message.includes(missing.revisionId));
+    return true;
+  });
+
+  // Failure must leave the index alone; restoring the object recovers both posts.
+  assert.equal(Object.keys((await publisher.readIndex()).data.posts).length, 2);
+  await store.put(key, saved.body);
+  assert.deepEqual((await loadPublishedPosts({ store })).map((p) => p.slug).sort(),
+    [missing.slug, healthy.slug].sort());
+});
 
 test("published revisions render through the same pipeline as files", async () => {
   const { publisher, store } = harness();
