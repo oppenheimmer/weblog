@@ -342,10 +342,16 @@ outsider can drive, not the ones ordinary writing touches.
 One password verification costs about 257 ms of CPU by design, so the monthly
 allowance is roughly 56,000 of them. The in-app limiter caps anonymous attempts
 at 50 per 15 minutes, which is 4,800 a day — a spray held at that ceiling would
-spend more CPU in a month than the plan includes. Nothing else is close:
-rendering a maths-heavy post costs 4.7 ms. If this ever matters, the fix is a
-Vercel Firewall rate rule on `/api/auth/login/`, because it refuses the request
-before a function starts.
+spend more CPU in a month than Hobby includes, and would need about twelve
+uninterrupted days to get there. Nothing else is close: rendering a maths-heavy
+post costs 4.7 ms, so **a login is roughly 55 times more expensive than serving
+a post**. That is the first place to look if compute usage ever seems strange.
+
+This is a watch item, not a live problem: usage notifications arrive
+automatically, and upgrading to Pro replaces the 30-day pause with on-demand
+billing. If it ever needs fixing rather than paying for, a Vercel Firewall rate
+rule on `/api/auth/login/` is the cheapest answer, because it refuses the
+request before a function starts.
 
 ### Backups
 
