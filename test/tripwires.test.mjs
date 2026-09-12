@@ -7,9 +7,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { buildFixtures, cleanup, FIXTURES, ROOT } from "./helpers/build-fixture.mjs";
-import { readRouting, headersFor } from "../lib/routing.mjs";
+import { buildFixtures, cleanup, walk, FIXTURES, ROOT } from "./helpers/build-fixture.mjs";
+import { readRouting, headersFor, fileFor } from "../lib/routing.mjs";
 import { toPlainText } from "../lib/markdown.mjs";
 
 const defect = (name) => path.join(FIXTURES, "defects", name, "posts");
@@ -39,6 +40,181 @@ test("tripwire: JSON-LD survives a title containing a script-closing sequence", 
       !payload.includes("</script"),
       "an unescaped </script> inside JSON-LD lets post metadata break out of the script element"
     );
+  } finally {
+    cleanup(dist);
+  }
+});
+
+/** Element text as an XML parser would take it: to the first closing tag. */
+function xmlText(source, element, from = 0) {
+  const open = source.indexOf(`<${element}>`, from);
+  if (open === -1) return null;
+  const start = open + element.length + 2;
+  return source.slice(start, source.indexOf(`</${element}>`, start));
+}
+
+test("tripwire: Open Graph survives a title that tries to close its attribute", () => {
+  // JSON-LD had its own tripwire from the §0 review; the same metadata reaches
+  // three other serializations, and until now none of them was covered. A
+  // title containing a quote would end the content="…" attribute and everything
+  // after it becomes markup in the page's head.
+  const dist = buildFixtures({ postsDir: defect("jsonld") });
+  try {
+    const html = fs.readFileSync(path.join(dist, "hostile-title", "index.html"), "utf8");
+    const head = html.slice(0, html.indexOf("</head>"));
+
+    for (const property of ["og:title", "og:description", "twitter:title", "twitter:description"]) {
+      const tag = head.match(new RegExp(`<meta[^>]*(?:property|name)="${property}"[^>]*>`));
+      if (!tag) continue;
+      const content = tag[0].match(/content="([^"]*)"/);
+      assert.ok(content, `${property} has no readable content attribute: ${tag[0]}`);
+      // Raw markup inside the value would mean the attribute ended early.
+      assert.ok(!/[<>]/.test(content[1]), `${property} carries raw markup: ${content[1]}`);
+      assert.ok(content[1].includes("&lt;") || content[1].includes("&amp;"),
+        `${property} lost the text it was supposed to escape: ${content[1]}`);
+    }
+
+    // And the description meta, which is the one every page has.
+    const description = head.match(/<meta name="description" content="([^"]*)"/);
+    assert.ok(description, "the page has no description meta");
+    assert.ok(!/[<>]/.test(description[1]), `description carries raw markup: ${description[1]}`);
+  } finally {
+    cleanup(dist);
+  }
+});
+
+test("tripwire: the feed stays well-formed when a post's metadata is hostile", () => {
+  const dist = buildFixtures({ postsDir: defect("jsonld") });
+  try {
+    const xml = fs.readFileSync(path.join(dist, "feed.xml"), "utf8");
+
+    // Structure first: a feed whose items do not close is a feed no reader
+    // will show, however well the text inside them was escaped.
+    assert.equal((xml.match(/<item>/g) || []).length, (xml.match(/<\/item>/g) || []).length);
+    assert.ok(!xml.includes("]]>"), "a CDATA terminator reached the feed");
+
+    const title = xmlText(xml, "title", xml.indexOf("<item>"));
+    assert.ok(title, "the hostile post has no item title");
+    assert.ok(!/[<>]/.test(title), `an item title carries raw markup: ${title}`);
+    assert.ok(title.includes("&lt;") && title.includes("&amp;"),
+      `an item title lost the text it was supposed to escape: ${title}`);
+
+    // Every ampersand in the document must be the start of an entity; a bare
+    // one is the single most common way a feed stops parsing.
+    const bare = xml.match(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g);
+    assert.deepEqual(bare, null, "the feed contains an ampersand that is not an entity");
+  } finally {
+    cleanup(dist);
+  }
+});
+
+test("tripwire: the sitemap lists absolute, escaped URLs and nothing else", () => {
+  const dist = buildFixtures({ postsDir: defect("jsonld") });
+  try {
+    const xml = fs.readFileSync(path.join(dist, "sitemap.xml"), "utf8");
+    const locations = [...xml.matchAll(/<loc>([^<]*)<\/loc>/g)].map((m) => m[1]);
+    assert.ok(locations.length > 0, "the sitemap lists nothing");
+
+    for (const loc of locations) {
+      assert.match(loc, /^https?:\/\//, `a sitemap entry is not absolute: ${loc}`);
+      assert.ok(!/[<>"']/.test(loc), `a sitemap entry carries raw markup: ${loc}`);
+      assert.doesNotThrow(() => new URL(loc), `a sitemap entry is not a URL: ${loc}`);
+    }
+    assert.equal(new Set(locations).size, locations.length, "the sitemap lists an address twice");
+
+    const bare = xml.match(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g);
+    assert.deepEqual(bare, null, "the sitemap contains an ampersand that is not an entity");
+  } finally {
+    cleanup(dist);
+  }
+});
+
+test("tripwire: an RSS guid identifies the post, not its contents", () => {
+  // A guid is how a reader decides whether it has already shown an item.
+  // Derive it from anything that changes when a post is edited — a hash, a
+  // timestamp, a revision — and every subscriber sees every edit as a new
+  // post. It has to be the post's address and nothing else.
+  const posts = fs.mkdtempSync(path.join(os.tmpdir(), "blog-guid-"));
+  const file = path.join(posts, "2026-08-02-guid.md");
+  const front = "---\ntitle: Guid stability\ndate: 2026-08-02\ntags: [meta]\n---\n";
+  fs.writeFileSync(file, `${front}\nThe first version of the body.\n`);
+
+  const guidsOf = (dist) =>
+    [...fs.readFileSync(path.join(dist, "feed.xml"), "utf8")
+      .matchAll(/<guid[^>]*>([^<]*)<\/guid>/g)].map((m) => m[1]);
+
+  const first = buildFixtures({ postsDir: posts });
+  let before;
+  try {
+    before = guidsOf(first);
+    assert.deepEqual(before.length, 1);
+    // The item's own link, so a reader following it lands on the post.
+    const link = xmlText(fs.readFileSync(path.join(first, "feed.xml"), "utf8"), "link",
+      fs.readFileSync(path.join(first, "feed.xml"), "utf8").indexOf("<item>"));
+    assert.equal(before[0], link, "a guid and its link disagree");
+    assert.match(before[0], /\/guid-stability\/$|\/guid\/$/);
+  } finally {
+    cleanup(first);
+  }
+
+  // Rewrite the body, keeping the address. Nothing a reader has seen changed
+  // identity, so nothing should reappear as new.
+  fs.writeFileSync(file, `${front}\nA completely rewritten body, twice as long as before.\n`);
+  const second = buildFixtures({ postsDir: posts });
+  try {
+    assert.deepEqual(guidsOf(second), before, "editing a post changed its feed identity");
+  } finally {
+    cleanup(second);
+    fs.rmSync(posts, { recursive: true, force: true });
+  }
+});
+
+test("tripwire: the emitted tree is the one vercel.json says it serves", () => {
+  // The generator and the platform configuration are edited independently and
+  // agree only by convention. A page emitted where `trailingSlash` cannot
+  // address it, or a static file sitting on a rewritten path, is invisible in
+  // every local check and obvious only in production.
+  const dist = buildFixtures();
+  try {
+    const config = routing();
+    const files = new Set(walk(dist));
+
+    for (const file of files) {
+      if (!file.endsWith(".html")) continue;
+      // `404.html` is the platform's own convention: it is served for an
+      // address that matched nothing, so it deliberately has no address of its
+      // own and is the one page this rule does not apply to.
+      if (file === "404.html") continue;
+      // `trailingSlash` serves directories, so every other page has to be an index.
+      assert.ok(file === "index.html" || file.endsWith("/index.html"),
+        `${file} is emitted where a trailing-slash URL cannot reach it`);
+
+      // And the address it implies has to map back to it. This is the round
+      // trip that ties the tree to the configuration rather than to a habit.
+      const url = `/${file.slice(0, -"index.html".length)}`;
+      assert.equal(fileFor(config, url), file, `${url} does not resolve to ${file}`);
+    }
+
+    // A rewrite exists because a function answers that address. A static file
+    // there would shadow it, and the editor would quietly stop being the
+    // editor.
+    for (const rewrite of config.rewrites) {
+      const served = fileFor(config, rewrite.source);
+      assert.ok(!served || !files.has(served),
+        `${rewrite.source} is rewritten to ${rewrite.destination} but ${served} was emitted`);
+    }
+
+    // Functions are never static output, whatever else changes.
+    for (const file of files) {
+      assert.ok(!file.startsWith("api/"), `the build emitted an API path: ${file}`);
+    }
+
+    // A header rule naming one exact file is a promise that the file exists.
+    for (const rule of config.rules) {
+      if (rule.source.includes("(.*)")) continue;
+      const served = fileFor(config, rule.source);
+      assert.ok(files.has(served), `${rule.source} has headers but is never emitted`);
+    }
   } finally {
     cleanup(dist);
   }
