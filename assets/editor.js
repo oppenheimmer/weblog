@@ -665,18 +665,21 @@ function renderPanel() {
     // Rebuilt only when the choices change, so a check every few seconds does
     // not undo a revision the author is in the middle of picking.
     const select = els.publicationRevision;
-    const signature = JSON.stringify([publication.postId, publication.revisionId, publication.site?.revisionId,
+    const signature = JSON.stringify([publication.postId, publication.revisionId,
+        publication.lastPublishedRevisionId, publication.site?.revisionId,
         publication.revisions.map((r) => r.revisionId)]);
     if (select.dataset.signature !== signature) {
         const samePost = select.dataset.postId === publication.postId;
         // The author's own pick survives; a default does not, so publishing a
         // newer revision moves the choice to it rather than offering a rollback.
         const picked = samePost && select.value !== select.dataset.default ? select.value : null;
-        // Once unpublished, the default is what was on the site until then, for
-        // as long as this page remembers it; otherwise the newest stored revision.
+        // Once unpublished, the server remembers what was last on the site in
+        // the same conditional write that removed it from the live index.
         const remembered = samePost && !publication.published ? select.dataset.default : null;
         const fallback = publication.revisionId ??
-            (revision(remembered) ? remembered : publication.revisions[0]?.revisionId) ?? "";
+            (revision(remembered) ? remembered : null) ??
+            (revision(publication.lastPublishedRevisionId)
+                ? publication.lastPublishedRevisionId : publication.revisions[0]?.revisionId) ?? "";
         select.replaceChildren(...publication.revisions.map((stored) => {
             const marks = [
                 stored.revisionId === publication.revisionId ? "published" : null,

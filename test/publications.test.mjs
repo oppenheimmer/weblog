@@ -202,7 +202,7 @@ test("unpublishing needs a real post id", async () => {
   assert.deepEqual(await publisher.unpublish("p_000000000000ffff"), { ok: true, changed: false });
 });
 
-test("once unpublished, the draft can be discarded", async () => {
+test("once unpublished, the draft and its last-live marker can be discarded", async () => {
   const { publisher, drafts } = harness();
   const { draft } = await drafts.create({ title: "Short-lived", date: "2026-07-01", body: "Gone soon." });
   await publisher.publish(draft);
@@ -210,6 +210,7 @@ test("once unpublished, the draft can be discarded", async () => {
 
   assert.ok((await drafts.remove(draft.postId)) > 0);
   assert.equal(await drafts.get(draft.postId), null);
+  assert.equal((await publisher.readIndex()).data.unpublished[draft.postId], undefined);
 });
 
 // ---------------------------------------------------------------- rolling back
@@ -241,6 +242,33 @@ test("an unpublished post is put back from its stored revision", async () => {
 
   assert.equal((await publisher.rollback(A, "r_000001_abc_1234")).changed, true);
   assert.equal((await indexOf(store))["a-post"]?.revisionId, "r_000001_abc_1234");
+});
+
+test("an unpublished post remembers the revision last shown, not the newest stored one", async () => {
+  const { publisher } = harness();
+  await publisher.publish(post());
+  await publisher.publish(post({ revisionId: "r_000002_abc_5678", version: 2, body: "Second." }));
+  await publisher.rollback(A, "r_000001_abc_1234");
+  await publisher.unpublish(A);
+
+  const [listed] = await publisher.listPublications();
+  assert.equal(listed.published, false);
+  assert.equal(listed.revisionId, null);
+  assert.equal(listed.lastPublishedRevisionId, "r_000001_abc_1234");
+  assert.deepEqual(listed.revisions.map((revision) => revision.revisionId),
+    ["r_000002_abc_5678", "r_000001_abc_1234"]);
+});
+
+test("putting a post back clears its unpublished marker", async () => {
+  const { publisher, store } = harness();
+  await publisher.publish(post());
+  await publisher.unpublish(A);
+  assert.equal((await publisher.readIndex()).data.unpublished[A].revisionId,
+    "r_000001_abc_1234");
+
+  await publisher.rollback(A, "r_000001_abc_1234");
+  assert.equal((await publisher.readIndex()).data.unpublished[A], undefined);
+  assert.equal((await indexOf(store))["a-post"].revisionId, "r_000001_abc_1234");
 });
 
 test("only a revision stored for that post can be rolled back to", async () => {

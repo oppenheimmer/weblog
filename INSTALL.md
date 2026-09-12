@@ -291,7 +291,8 @@ There is no repository step and no terminal step.
 
 From the same panel: **Unpublish** takes a post off the site while keeping its
 revisions, and **Roll back** (or **Put back**) puts a stored revision on the
-site. **Rebuild site** sits beside the publication list rather than in the
+site. Put back defaults to the revision last shown, including after an editor
+reload. **Rebuild site** sits beside the publication list rather than in the
 panel, since it is about the site and not a post, and is offered even when
 nothing is published. It rebuilds and sweeps what nothing needs any more,
 reporting what it removed; it pauses 30 seconds after a click, to stay inside

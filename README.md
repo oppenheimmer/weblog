@@ -68,7 +68,8 @@ that instead. From the same panel:
 
 - **Unpublish** takes a post off the site. Its revisions stay, so it can come back.
 - **Roll back** puts a stored revision back on the site; for an unpublished post
-  the same button reads **Put back**.
+  the same button reads **Put back**. After a reload it still defaults to the
+  revision last shown, even when a newer stored revision exists.
 - **Rebuild site** rebuilds without changing any post, and sweeps what nothing
   needs any more — superseded revisions past the rollback window, abandoned
   uploads, orphaned media — reporting what it removed. It sits beside the list

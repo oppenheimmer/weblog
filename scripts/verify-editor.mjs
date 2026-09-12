@@ -398,7 +398,21 @@ try {
       gone.rollback === "Put back on the site" && !gone.rollbackDisabled && gone.revisions.length === 2) ||
       { coming, gone, dialog: page.dialogs.at(-1) };
   });
-  await page.click("#publication-rollback");
+  await page.reload();
+  await page.until(`document.getElementById("publication-list").textContent.includes("Lifecycle probe")`);
+  await page.eval(`[...document.querySelectorAll("#publication-list button")]
+    .find((button) => button.textContent.includes("Lifecycle probe")).click()`);
+  await check("after a reload, Put back still defaults to the revision last on the site", async () => {
+    const result = await page.until(`(() => {
+      const chosen = document.getElementById("publication-revision").value || null;
+      const title = document.getElementById("title").value;
+      return (chosen && title) ? { chosen, title } : null;
+    })()`);
+    return (/^r_000001_/.test(result.chosen) && result.title === "Lifecycle probe") || result;
+  });
+  // The DevTools harness's synthetic mouse events stop reaching listeners after
+  // reload on this Chromium build (Step 7); dispatch the real DOM click here.
+  await page.eval(`document.getElementById("publication-rollback").click()`);
   await check("Put back publishes the chosen revision again", async () => {
     const waiting = await page.until(chipIs("Not live yet"));
     await finishBuild();
