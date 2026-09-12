@@ -365,6 +365,34 @@ test("an unpublished post is published again from its unchanged draft", async ()
 
 // ---------------------------------------------------------------- listing
 
+test("a revision published again keeps the time it was first stored", async () => {
+  // The editor lists stored revisions by their stored time. Rewriting the
+  // object on every publish moved that time, so putting a post back reordered
+  // its history as if the old revision were new.
+  const { publisher, store } = harness();
+  await publisher.publish(post());
+  const stored = async () => (await publisher.listPublications())[0].revisions[0].storedAt;
+  const first = await stored();
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await publisher.unpublish(A);
+  await publisher.publish(post(), { idempotencyKey: "again" });
+  assert.equal((await indexOf(store))["a-post"].revisionId, "r_000001_abc_1234");
+  assert.equal(await stored(), first);
+});
+
+test("a stored revision that no longer matches what publishing produces is rewritten", async () => {
+  const { publisher, store } = harness();
+  await publisher.publish(post());
+  const key = revisionKey(A, "r_000001_abc_1234");
+  const damaged = (await store.getJson(key)).data;
+  await store.putJson(key, { ...damaged, body: "Not what was published." });
+
+  await publisher.unpublish(A);
+  await publisher.publish(post(), { idempotencyKey: "again" });
+  assert.equal((await store.getJson(key)).data.body, "First.");
+});
+
 test("the publications list shows posts on and off the site, with stored revisions newest first", async () => {
   const { publisher } = harness();
   await publisher.publish(post());
