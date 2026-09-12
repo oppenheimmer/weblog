@@ -49,7 +49,7 @@ try {
     if (!nodeId) return null;
     const { nodes } = await call("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
     const node = nodes.find((n) => !n.ignored) ?? nodes[0];
-    return { role: node?.role?.value ?? null, name: node?.name?.value ?? "" };
+    return { role: node?.role?.value ?? null, name: node?.name?.value ?? "", description: node?.description?.value ?? "" };
   }
 
   /** Count changes to an element's content from now on, as a live region would hear them. */
@@ -182,6 +182,11 @@ try {
     const vague = names.filter(({ file, name }) => !name.includes(file));
     // Two files, so a list where every button is just "Insert" or "Remove" fails.
     return (names.length === 4 && vague.length === 0) || names;
+  });
+  await check("Publish is described by what it will publish", async () => {
+    await page.until(`document.getElementById("publish-readiness").dataset.state === "ready"`);
+    const node = await ax("#publish");
+    return node.description === "Ready to publish at /keyboard-and-assistive-checks/ with 2 images." || node;
   });
   await check("the page has exactly one top-level heading", async () =>
     (await page.eval(`document.querySelectorAll("h1").length`)) === 1);

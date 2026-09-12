@@ -12,7 +12,7 @@ const els = {
     slugPreview: $("slug-preview"), description: $("description"), tags: $("tags"),
     body: $("body"), save: $("save"), newPost: $("new-post"), logout: $("logout"),
     discard: $("discard"), exportBtn: $("export"), error: $("editor-error"),
-    publish: $("publish"), publishedNote: $("editor-published"),
+    publish: $("publish"), publishedNote: $("editor-published"), publishReadiness: $("publish-readiness"),
     conflict: $("conflict"), conflictKeep: $("conflict-keep"), conflictTheirs: $("conflict-theirs"),
     conflictDetail: $("conflict-detail"), conflictNote: $("conflict-note"),
     attach: $("attach"), attachInput: $("attach-input"),
@@ -46,6 +46,7 @@ const state = {
     attachmentAlts: new Map(),
     drafts: [],
     preview: { open: false, seq: 0, controller: null, timer: null, refresher: null, lastKey: null },
+    readiness: { seq: 0, controller: null, timer: null },
     // What the site shows. `selected` is a post picked from "On the site" whose
     // draft is not the one open; otherwise the panel follows the open draft.
     publications: [],
@@ -660,6 +661,66 @@ function renderAttachments() {
     renderRelinking();
     // The preview shows attachments, so a change to them is a change to it.
     schedulePreview();
+    scheduleReadiness();
+}
+
+// ---------------------------------------------------------------- readiness
+
+const READINESS_DEBOUNCE_MS = 900;
+
+function scheduleReadiness() {
+    clearTimeout(state.readiness.timer);
+    state.readiness.timer = setTimeout(() => { refreshReadiness(); }, READINESS_DEBOUNCE_MS);
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+const joinWords = (words) => words.length < 2 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+
+/**
+ * Say what Publish would do with the fields on screen, before it is pressed.
+ *
+ * The server answers with publishing's own decision — the address and exactly
+ * what goes out with the post, or the refusal publishing would give — so this
+ * line cannot promise a publish that will be refused. Only the newest answer
+ * is shown, as with preview.
+ */
+async function refreshReadiness() {
+    state.readiness.controller?.abort();
+    const controller = new AbortController();
+    state.readiness.controller = controller;
+    const seq = ++state.readiness.seq;
+    let text;
+    let kind;
+    try {
+        const { data } = await api("/api/publish/", {
+            method: "POST", body: { action: "check", ...readForm(), postId: state.postId }, signal: controller.signal,
+        });
+        if (seq !== state.readiness.seq) return;
+        if (!data.ready) {
+            text = `Not ready to publish: ${data.refusal.message}`;
+            kind = "error";
+        } else {
+            const labs = data.interactives.filter((item) => item.kind === "demo").length;
+            const figures = data.interactives.length - labs;
+            const parts = [
+                data.media.length && plural(data.media.length, "image"),
+                data.snippets.length && plural(data.snippets.length, "snippet"),
+                figures && plural(figures, "figure"),
+                labs && plural(labs, "lab"),
+            ].filter(Boolean);
+            text = `Ready to publish at ${data.url} with ${parts.length ? joinWords(parts) : "no attachments"}.`;
+            if (data.unused.length) text += ` Attached but not used: ${data.unused.join(", ")}.`;
+            kind = "ready";
+        }
+    } catch (err) {
+        if (err.name === "AbortError" || seq !== state.readiness.seq || err.message === "unauthenticated") return;
+        // A draft the server will not even hold is not ready either; anything
+        // else is a check that could not be made, and says so.
+        text = err.data?.code ? `Not ready to publish: ${err.message}` : `Could not check what Publish would do: ${err.message}`;
+        kind = err.data?.code ? "error" : "unknown";
+    }
+    writeText(els.publishReadiness, text);
+    els.publishReadiness.dataset.state = kind;
 }
 
 /**
@@ -1063,6 +1124,7 @@ async function unpublishShown() {
     await refreshPublications();
     keepPanelFocus(hadFocus);
     watchSite({ restart: true });
+    scheduleReadiness(); // an unpublished post's address is free again
 }
 
 async function rollbackShown() {
@@ -1080,6 +1142,7 @@ async function rollbackShown() {
     await refreshPublications();
     keepPanelFocus(hadFocus);
     watchSite({ restart: true });
+    scheduleReadiness();
 }
 
 async function branchShown() {
@@ -1143,6 +1206,7 @@ els.publish.addEventListener("click", guard(async () => {
         state.selected = null;
         await refreshPublications();
         watchSite({ restart: true });
+        scheduleReadiness(); // the address may be locked now
     } finally {
         setBusy(els.publish, false);
     }
@@ -1245,6 +1309,7 @@ for (const id of FIELDS) {
         if (isDirty()) setStatus("unsaved");
         scheduleAutosave();
         schedulePreview();
+        scheduleReadiness();
         if (id === "body") renderRelinking();
         if (id === "format") renderAttachments();
     });

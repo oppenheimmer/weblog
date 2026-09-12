@@ -118,12 +118,22 @@ try {
   await check("an unresolved reference is offered for relinking", async () =>
     (await page.eval(`!document.getElementById("relink-tools").hidden &&
       document.getElementById("unresolved-reference").value === "image:a_0000000000000000"`)) === true);
+  await check("beside Publish, the missing reference is named before Publish is pressed", async () => {
+    const readiness = await page.until(`document.getElementById("publish-readiness").dataset.state === "error" && ({
+      text: document.getElementById("publish-readiness").textContent })`);
+    return /a_0000000000000000/.test(readiness.text) || readiness;
+  });
   await page.click("#relink");
   await check("relink replaces the missing id with a verified attachment", async () => {
     const result = await page.eval(`({ body: document.getElementById("body").value,
       hidden: document.getElementById("relink-tools").hidden })`);
     return (!result.body.includes("a_0000000000000000") &&
       result.body.includes("a_0000000000000001") && result.hidden) || result;
+  });
+  await check("once relinked, Publish is said to be ready, at its address, with its one image", async () => {
+    const text = await page.until(`document.getElementById("publish-readiness").dataset.state === "ready" &&
+      document.getElementById("publish-readiness").textContent`);
+    return text === "Ready to publish at /imported-writing-flow/ with 1 image." || text;
   });
   await page.click("#preview-toggle");
   await check("the attached draft previews without a publication error", async () => {
@@ -181,6 +191,11 @@ try {
 
   console.log("\nIts address:");
   await page.type("#slug", "moved-elsewhere");
+  await check("a locked address is named beside Publish before it is pressed", async () => {
+    const text = await page.until(`document.getElementById("publish-readiness").dataset.state === "error" &&
+      document.getElementById("publish-readiness").textContent`);
+    return /cannot change while it is published/.test(text) || text;
+  });
   await page.click("#publish");
   await check("publishing it under a new slug is refused, and not reported as published", async () => {
     const error = await page.until(`document.getElementById("editor-error").textContent || null`);

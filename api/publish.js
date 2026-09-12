@@ -6,11 +6,12 @@
 //   POST /api/publish/  { action: "unpublish", postId }            take a post off the site
 //   POST /api/publish/  { action: "rollback", postId, revisionId } put a stored revision on the site
 //   POST /api/publish/  { action: "rebuild" }                      rebuild, and sweep what no post needs
+//   POST /api/publish/  { action: "check", postId?, ...fields }    what Publish would do, doing none of it
 //
 // One function for all of it, as with api/uploads/: every function counts
 // against the Vercel plan's limit. A change answers as soon as R2 holds it;
 // GET is how the editor learns when the site has caught up.
-import { createDraftStore } from "../lib/server/drafts.mjs";
+import { createDraftStore, normalizeDraftInput, DraftError } from "../lib/server/drafts.mjs";
 import { createPublisher, PublishError } from "../lib/server/publish.mjs";
 import { readSiteManifest, siteStatus } from "../lib/server/deployments.mjs";
 import { route, readJsonBody, sendJson, sendError } from "../lib/server/http.mjs";
@@ -42,13 +43,32 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, housek
       });
     }
 
+    const body = await readJsonBody(req);
+    const action = body?.action ?? "publish";
+
+    // Read-only, so it answers even where publishing is disabled — and says so.
+    // The fields are the ones on screen, as preview takes them, because Publish
+    // saves those first; what the post branched from comes from its stored
+    // draft, never from the request.
+    if (action === "check") {
+      const fields = normalizeDraftInput(body ?? {});
+      const postId = body?.postId ?? null;
+      const stored = postId === null ? null : await createDraftStore(store).get(postId);
+      if (postId !== null && !stored) return sendError(res, 404, "not_found", "No such draft.", { requestId });
+      if (process.env.PUBLISH_ENABLED === "false") {
+        return sendJson(res, 200, { ready: false, refusal: {
+          code: "publish_disabled", field: null, message: "Publishing is disabled in this environment.",
+        } });
+      }
+      return sendJson(res, 200, await publisher.check({
+        ...fields, postId, publishedRevisionId: stored?.draft.publishedRevisionId ?? null,
+      }));
+    }
+
     if (process.env.PUBLISH_ENABLED === "false") {
       return sendError(res, 403, "publish_disabled",
         "Publishing is disabled in this environment.", { requestId });
     }
-
-    const body = await readJsonBody(req);
-    const action = body?.action ?? "publish";
 
     if (action === "rebuild") return sendJson(res, 200, await publisher.rebuildSite());
 
@@ -72,8 +92,8 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, housek
     });
     return sendJson(res, 200, { job, url: `/${found.draft.slug}/` });
   } catch (err) {
-    if (err instanceof PublishError) {
-      return sendError(res, err.status, err.code, err.message, {
+    if (err instanceof PublishError || err instanceof DraftError) {
+      return sendError(res, err.status, err.code ?? "invalid_draft", err.message, {
         fields: err.field ? { [err.field]: err.message } : undefined, requestId,
       });
     }

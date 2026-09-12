@@ -172,6 +172,8 @@
 .source-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 
 .editor-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.publish-readiness { margin: 0; color: #3d5567; font-size: 0.9rem; flex: 1 1 100%; min-height: 1.2em; }
+.publish-readiness[data-state="error"] { color: #b3261e; }
 .editor-error { margin: 0; color: #b3261e; font-size: 0.9rem; flex: 1 1 100%; }
 .editor-published { margin: 0; color: #1e6b3a; font-size: 0.9rem; flex: 1 1 100%; }
 .editor-published a { color: inherit; }

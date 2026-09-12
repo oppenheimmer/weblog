@@ -46,6 +46,13 @@ documents cannot import engine-only script, style, head or Distill hooks.
 Publishing refuses a post without a title, a date, or a body. Drafts live in
 R2 and are never built.
 
+Beside **Publish**, a line says what it would do with the text on screen:
+*Ready to publish at /your-slug/ with 2 images and 1 snippet*, plus any
+attached file the post does not use — or the refusal Publish would give, such
+as a reference to an attachment that is gone or an address another post holds.
+It comes from publishing's own checks, so it cannot promise a publish that
+will be refused, and it is what a screen reader hears on the Publish button.
+
 **Preview** shows the post beside its source exactly as it will publish, in a
 sandboxed frame. It reports what publishing would refuse as errors, and what
 would not render as written, such as a broken formula or an unsupported LaTeX

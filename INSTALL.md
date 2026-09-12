@@ -288,6 +288,8 @@ There is no repository step and no terminal step.
 4. Changes autosave after a short quiet period; **Save** makes an immediate
    checkpoint. **Publish** saves first, freezes that revision into R2,
    updates the published index, and fires the deploy hook.
+   The line beside Publish says beforehand what it will publish — the
+   address, images, snippets and interactives — or why it would refuse.
 5. **On the site** reads the live build manifest back and reports Live, Not live
    yet, Updating, Coming down, Unpublished or Not checked. It keeps checking —
    after 4 seconds, then less often, up to every 30 seconds — and after 15
