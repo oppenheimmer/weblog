@@ -107,3 +107,6 @@ jobs:
 
       - name: A sealed lab stays sealed, framed or opened directly
         run: node scripts/verify-demo-sandbox.mjs
+
+      - name: Public pages refuse third-party code and data
+        run: node scripts/verify-public-csp.mjs

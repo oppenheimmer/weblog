@@ -197,6 +197,12 @@ The ordinary editor preview remains script-free. A deliberate **Run interactive 
 lab in its production sandbox or grant a verified article figure its documented page access. Listings, printing,
 no-JavaScript browsers, loading and failures show the required fallback instead.
 
+Every generated public page carries a CSP. Article figures may import modules
+and fetch data from this site, but third-party script and data connections are
+refused. The two fixed inline head scripts are admitted by exact hashes; Google
+Fonts is named only for styles and fonts. Bundles therefore have to be
+self-contained rather than merely promise to be.
+
 Interactive folders are content, not engine code. They live in R2, never in Git. A future staging push may send a
 Markdown file and its interactive folders through the same publication service, verify every uploaded byte, and
 remove only the confirmed local files. The folder must be empty after a successful push.
@@ -232,6 +238,9 @@ The build copies a `posts/` folder from the assets directory
 (`BLOG_ASSETS_DIR`) to `/assets/posts/`, and `distill: true` loads the
 self-hosted `assets/vendor/distill.template.v2.js`. The test fixtures exercise
 every hook, with their assets in `test/fixtures/assets/posts/`.
+Script and stylesheet hooks must use same-origin paths: the public CSP refuses
+outside code. Inline script or style placed in `head` is refused as well; use
+the dedicated, self-hosted hooks for executable or styled content.
 
 Posts published from the editor can never set these hooks, and their raw HTML
 is escaped. In listings, a post that uses a hook appears as its title and
@@ -581,9 +590,11 @@ Editor pages send a strict CSP with **no inline script**, plus `noindex`,
 shares an origin with the published site, so any script that reached a
 published page would run where the editor session lives. The preview frame is
 sandboxed with no permissions at all, so a script placed in a preview cannot
-run either. Planned article figures are the narrow owner-authorized exception:
-they receive page access only through a verified `::figure` record. Planned
-`::demo` labs remain sandboxed even though their files use the same hostname.
+run either. Public pages have a separate policy that admits same-origin code and
+data but refuses third-party script and connections. Article figures are the
+narrow owner-authorized exception: they receive page access only through a
+verified `::figure` record. `::demo` labs remain sandboxed even though their
+files use the same hostname.
 
 The client is dependency-free: metadata fields, a textarea, attachments, a live
 preview, conditional saves, Ctrl/Cmd-S, and a `beforeunload` guard.

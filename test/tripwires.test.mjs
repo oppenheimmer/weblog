@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -211,7 +212,7 @@ test("tripwire: the emitted tree is the one vercel.json says it serves", () => {
 
     // A header rule naming one exact file is a promise that the file exists.
     for (const rule of config.rules) {
-      if (rule.source.includes("(.*)")) continue;
+      if (rule.source.includes("(.*)") || rule.source.includes("((?!")) continue;
       const served = fileFor(config, rule.source);
       assert.ok(files.has(served), `${rule.source} has headers but is never emitted`);
     }
@@ -523,6 +524,49 @@ test("tripwire: the engine imports a figure only from where it publishes one", (
   const sources = script.match(/var VENDORED_SOURCES = \{([^}]*)\}/);
   assert.ok(sources, "the engine has no vendored-library table");
   assert.ok(!/https?:/.test(sources[1]), `a vendored library is loaded off-site: ${sources[1]}`);
+});
+
+test("tripwire: every public page refuses outside script and data loads", async () => {
+  const { listPage, postPage, notFoundPage } = await import("../lib/templates.mjs");
+  const post = {
+    slug: "a", title: "A", date: "2026-01-01T00:00:00.000Z",
+    description: "", tags: [], readingTime: 1, math: false,
+    html: "<p>a</p>", scripts: [], styles: [], head: "", distill: false,
+  };
+  const pages = [
+    ["/", listPage([post])],
+    ["/a/", postPage(post)],
+    ["/missing/", notFoundPage()],
+  ];
+  const policy = headersFor(routing(), "/a/").get("content-security-policy");
+
+  assert.match(policy, /(?:^|; )default-src 'none'(?:;|$)/);
+  assert.match(policy, /(?:^|; )script-src 'self' 'sha256-[^']+' 'sha256-[^']+'(?:;|$)/);
+  assert.match(policy, /(?:^|; )connect-src 'self'(?:;|$)/);
+  assert.doesNotMatch(policy, /script-src[^;]*'unsafe-inline'/);
+  assert.doesNotMatch(policy, /(?:script-src|connect-src)[^;]*https?:/);
+
+  for (const [pathname, html] of pages) {
+    assert.equal(headersFor(routing(), pathname).get("content-security-policy"), policy,
+      `${pathname} does not receive the public policy`);
+    const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+      .map((match) => crypto.createHash("sha256").update(match[1]).digest("base64"));
+    for (const digest of inline) {
+      assert.ok(policy.includes(`'sha256-${digest}'`),
+        "a public inline script is not admitted by its exact hash");
+    }
+  }
+
+  for (const privatePath of [
+    "/api", "/api/drafts/", "/editor", "/editor/", "/login", "/login/",
+    "/demos/a/lab/r/",
+    "/assets/figures/a/fig/r/",
+  ]) {
+    assert.equal(headersFor(routing(), privatePath).get("content-security-policy"),
+      privatePath.startsWith("/demos/") || privatePath.startsWith("/assets/figures/")
+        ? "sandbox allow-scripts" : undefined,
+      `the public-page policy leaked onto ${privatePath}`);
+  }
 });
 
 test("tripwire: a figure's one document is sandboxed too", () => {

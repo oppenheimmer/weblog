@@ -24,6 +24,15 @@
   "trailingSlash": true,
   "headers": [
     {
+      "source": "/((?!api(?:/|$)|editor(?:/|$)|login(?:/|$)|demos(?:/|$)|assets/figures(?:/|$)).*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; script-src 'self' 'sha256-WZRJfWvsnNCPcxzZwvyhovnZGqhZaC+8gPGPRbx6wTk=' 'sha256-eQFTCRW0GRMmGZfk2WFOvO7QyNryti0GVsZuYnibils='; connect-src 'self'; style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'self'; frame-src 'self'; worker-src 'self'"
+        }
+      ]
+    },
+    {
       "source": "/styles/fonts/(.*)",
       "headers": [
         {
