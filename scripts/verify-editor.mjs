@@ -663,12 +663,16 @@ try {
   });
   await page.eval(`document.getElementById("publication-branch").click()`);
   await check("Edit as draft keeps the post identity and loads the published text", async () => {
-    const draft = await page.until(`document.getElementById("title").value === "Welcome" && ({
+    // loadDraft fills the form before awaiting attachments and the draft list.
+    // Only branchShown's final status means the panel has finished refreshing.
+    const draft = await page.until(`document.getElementById("save-state").textContent ===
+      "draft created from published revision" && ({
+      title: document.getElementById("title").value,
       body: document.getElementById("body").value,
       status: document.getElementById("save-state").textContent,
       branchHidden: document.getElementById("publication-branch").hidden,
     })`);
-    return (draft.body === "Migrated, so it has no draft." && draft.status === "draft created from published revision" &&
+    return (draft.title === "Welcome" && draft.body === "Migrated, so it has no draft." &&
       draft.branchHidden) || draft;
   });
 
