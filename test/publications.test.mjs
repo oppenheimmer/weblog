@@ -25,7 +25,7 @@ const B = "p_00000000000000bb";
 const MINUTE = 60 * 1000;
 
 /** A publisher over a fake bucket, with a deploy hook that records its calls. */
-function harness({ hook, now } = {}) {
+function harness({ hook, now, housekeep } = {}) {
   const client = createFakeS3();
   const store = createStore({ config: FAKE_CONFIG, client });
   const hooks = [];
@@ -35,7 +35,9 @@ function harness({ hook, now } = {}) {
   };
   return {
     store, client, hooks,
-    publisher: createPublisher(store, { fireDeployHook, ...(now ? { now } : {}) }),
+    publisher: createPublisher(store, {
+      fireDeployHook, ...(now ? { now } : {}), ...(housekeep ? { housekeep } : {}),
+    }),
     drafts: createDraftStore(store),
   };
 }
@@ -355,8 +357,8 @@ test("the publications list shows posts on and off the site, with stored revisio
 // ---------------------------------------------------------------- the route
 
 /** A signed-in context over a fake bucket, with the hook and the site stubbed. */
-function routeHarness({ manifest = { ok: true, commit: "c1", posts: [] } } = {}) {
-  const { store, publisher, drafts } = harness();
+function routeHarness({ manifest = { ok: true, commit: "c1", posts: [] }, housekeep } = {}) {
+  const { store, publisher, drafts } = harness({ housekeep });
   const sessions = createSessionStore(store, { authVersion: 1 });
   const hooks = [];
   setContext({
@@ -364,6 +366,7 @@ function routeHarness({ manifest = { ok: true, commit: "c1", posts: [] } } = {})
     limiter: createRateLimiter(store, { secret: "test-secret" }),
     fireDeployHook: async () => { hooks.push(1); return { job: "d" }; },
     readManifest: async () => manifest,
+    ...(housekeep ? { housekeep } : {}),
   });
   return { store, publisher, drafts, sessions, hooks };
 }
@@ -445,8 +448,40 @@ test("rollback, unpublish and rebuild go through the route", async () => {
   assert.deepEqual(down.json, { ok: true, changed: true, slug: "a-post", rebuilding: true });
 
   const rebuilt = await call(h, { method: "POST", body: { action: "rebuild" } });
-  assert.deepEqual(rebuilt.json, { triggered: true, hook: { job: "d" } });
+  assert.deepEqual(rebuilt.json, { triggered: true, hook: { job: "d" }, swept: { objects: 0, bytes: 0 } });
   assert.equal(h.hooks.length, 3);
+});
+
+test("Rebuild site sweeps what no post needs, and says how much it removed", async () => {
+  // The button is the only way to collect garbage without a terminal, since
+  // nothing else sweeps when no post has changed.
+  const swept = [];
+  const h = routeHarness({
+    housekeep: async (store) => {
+      swept.push(store);
+      return { ok: true, swept: { deleted: 3, bytesFreed: 2048 } };
+    },
+  });
+  const rebuilt = await call(h, { method: "POST", body: { action: "rebuild" } });
+  assert.deepEqual(rebuilt.json.swept, { objects: 3, bytes: 2048 });
+  assert.equal(swept.length, 1, "Rebuild site did not sweep");
+});
+
+test("publishing sweeps once, not twice, though it rebuilds on the way", async () => {
+  // Every state change fires the hook through rebuild(); if the sweep lived
+  // there, a publish would scan the whole bucket twice for nothing.
+  let sweeps = 0;
+  const h = routeHarness({ housekeep: async () => { sweeps++; return { ok: true, swept: { deleted: 0, bytesFreed: 0 } }; } });
+  await h.publisher.publish(post());
+  assert.equal(sweeps, 1, `publishing swept ${sweeps} times`);
+});
+
+test("a sweep that fails does not fail the rebuild the author asked for", async () => {
+  const h = routeHarness({ housekeep: async () => ({ ok: false, error: "R2 is unwell" }) });
+  const rebuilt = await call(h, { method: "POST", body: { action: "rebuild" } });
+  assert.equal(rebuilt.status, 200);
+  assert.equal(rebuilt.json.triggered, true);
+  assert.equal(rebuilt.json.swept, null, "a failed sweep should report nothing, not a number");
 });
 
 test("refusals come back as structured errors, naming the field when there is one", async () => {

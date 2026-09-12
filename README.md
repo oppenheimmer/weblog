@@ -69,7 +69,10 @@ that instead. From the same panel:
 - **Unpublish** takes a post off the site. Its revisions stay, so it can come back.
 - **Roll back** puts a stored revision back on the site; for an unpublished post
   the same button reads **Put back**.
-- **Rebuild site** fires the deploy hook again without changing anything.
+- **Rebuild site** rebuilds without changing any post, and sweeps what nothing
+  needs any more — superseded revisions past the rollback window, abandoned
+  uploads, orphaned media — reporting what it removed. It sits beside the list
+  rather than in the panel, because it is about the site, not about a post.
 
 A published post keeps its slug: publishing it under another is refused until
 it is unpublished. Discarding a draft is refused while its post is published,

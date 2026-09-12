@@ -290,9 +290,12 @@ There is no repository step and no terminal step.
    minutes says the build may have failed.
 
 From the same panel: **Unpublish** takes a post off the site while keeping its
-revisions, **Roll back** (or **Put back**) puts a stored revision on the site,
-and **Rebuild site** fires the deploy hook without changing anything — that
-button pauses 30 seconds after a click, to stay inside Vercel's hourly limit.
+revisions, and **Roll back** (or **Put back**) puts a stored revision on the
+site. **Rebuild site** sits beside the publication list rather than in the
+panel, since it is about the site and not a post, and is offered even when
+nothing is published. It rebuilds and sweeps what nothing needs any more,
+reporting what it removed; it pauses 30 seconds after a click, to stay inside
+Vercel's hourly hook limit.
 
 Pushing to `main` rebuilds the engine with the same content; publishing rebuilds
 the same engine with new content. Both go through the same build.

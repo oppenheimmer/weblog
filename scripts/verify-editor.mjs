@@ -472,6 +472,55 @@ try {
   });
   deployment.status = 200;
 
+  console.log("\nWith no post selected:");
+  await check("Rebuild site is still reachable, and sweeps while it rebuilds", async () => {
+    // It used to live inside the per-post panel, which is hidden until a
+    // published post is selected — so the one action that is about the site
+    // rather than a post was unreachable on a blog with no posts.
+    for (const publication of await publisher.listPublications()) {
+      if (publication.published) await publisher.unpublish(publication.postId);
+    }
+    await finishBuild();
+    // A fresh load with nothing selected: the per-post panel is hidden, which is
+    // the state a blog with no posts is permanently in.
+    await page.reload();
+    await page.until(`document.getElementById("publication").hidden === true`);
+
+    const before = hooks.length;
+    const visible = await page.eval(`(() => {
+      const b = document.getElementById("publication-rebuild");
+      const panel = document.getElementById("publication");
+      return { offered: Boolean(b) && b.offsetParent !== null, panelHidden: panel.hidden,
+        disabledBefore: b.disabled };
+    })()`);
+    // A real click would land on the button and nothing else — checked with
+    // elementFromPoint rather than assumed, since "visible" and "clickable" are
+    // different claims.
+    const hit = await page.eval(`(() => {
+      const b = document.getElementById("publication-rebuild");
+      b.scrollIntoView({ block: "center", behavior: "instant" });
+      const r = b.getBoundingClientRect();
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return at ? (at.id || at.tagName) : null;
+    })()`);
+
+    // The click itself is dispatched in the page. Synthetic mouse events from
+    // the protocol stop arriving after a reload in this harness — measured: the
+    // button is enabled, elementFromPoint names it, and the handler still never
+    // runs, while el.click() on the same element does. Every other check clicks
+    // before a reload, which is why only this one meets it.
+    await page.eval(`document.getElementById("publication-rebuild").click()`);
+    await sleep(1500);
+    const after = await page.eval(`({
+      note: document.getElementById("rebuild-note").textContent,
+      disabled: document.getElementById("publication-rebuild").disabled,
+      error: document.getElementById("editor-error").textContent,
+    })`);
+    return (visible.offered && visible.panelHidden && hit === "publication-rebuild" &&
+      hooks.length === before + 1 && after.disabled && !after.error &&
+      /Rebuilding/.test(after.note)) || { visible, hit, after, fired: hooks.length - before };
+  });
+
   console.log("\nPhone:");
   await page.resize(390, 844);
   await page.eval(`document.getElementById("publication").scrollIntoView({ block: "center", behavior: "instant" })`);

@@ -5,7 +5,7 @@
 //   POST /api/publish/  { postId }                                 publish the post's saved draft
 //   POST /api/publish/  { action: "unpublish", postId }            take a post off the site
 //   POST /api/publish/  { action: "rollback", postId, revisionId } put a stored revision on the site
-//   POST /api/publish/  { action: "rebuild" }                      rebuild without changing anything
+//   POST /api/publish/  { action: "rebuild" }                      rebuild, and sweep what no post needs
 //
 // One function for all of it, as with api/uploads/: every function counts
 // against the Vercel plan's limit. A change answers as soon as R2 holds it;
@@ -15,10 +15,15 @@ import { createPublisher, PublishError } from "../lib/server/publish.mjs";
 import { readSiteManifest, siteStatus } from "../lib/server/deployments.mjs";
 import { route, readJsonBody, sendJson, sendError } from "../lib/server/http.mjs";
 
-// `fireDeployHook` and `readManifest` come from the context only in tests; in
-// production the real hook fires and the real site is read.
-export default route(async ({ req, res, requestId, store, fireDeployHook, readManifest = readSiteManifest }) => {
-  const publisher = createPublisher(store, fireDeployHook ? { fireDeployHook } : {});
+// `fireDeployHook`, `readManifest` and `housekeep` come from the context only in
+// tests; in production the real hook fires, the real site is read, and the real
+// sweep runs.
+export default route(async ({ req, res, requestId, store, fireDeployHook, housekeep,
+  readManifest = readSiteManifest }) => {
+  const publisher = createPublisher(store, {
+    ...(fireDeployHook ? { fireDeployHook } : {}),
+    ...(housekeep ? { housekeep } : {}),
+  });
 
   try {
     if (req.method === "GET") {
@@ -45,7 +50,7 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, readMa
     const body = await readJsonBody(req);
     const action = body?.action ?? "publish";
 
-    if (action === "rebuild") return sendJson(res, 200, await publisher.rebuild());
+    if (action === "rebuild") return sendJson(res, 200, await publisher.rebuildSite());
 
     const postId = body?.postId;
     if (!postId) {

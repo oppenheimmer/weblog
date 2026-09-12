@@ -23,7 +23,7 @@ const els = {
     publication: $("publication"), publicationChip: $("publication-chip"),
     publicationSummary: $("publication-summary"), publicationRevision: $("publication-revision"),
     publicationRollback: $("publication-rollback"), publicationRebuild: $("publication-rebuild"),
-    publicationUnpublish: $("publication-unpublish"),
+    publicationUnpublish: $("publication-unpublish"), rebuildNote: $("rebuild-note"),
 };
 
 const state = {
@@ -773,8 +773,17 @@ async function rollbackShown() {
 async function rebuildSite() {
     els.publicationRebuild.disabled = true;
     setTimeout(() => { els.publicationRebuild.disabled = false; }, REBUILD_PAUSE_MS);
+    els.rebuildNote.textContent = "Rebuilding…";
     const { data } = await api("/api/publish/", { method: "POST", body: { action: "rebuild" } });
     setError(data.triggered ? "" : `The rebuild could not be triggered: ${data.error}`);
+    // Rebuilding also sweeps what no post needs any more. Say so only when it
+    // actually removed something: "freed 0 KB" is noise on every other click.
+    const swept = data.swept;
+    els.rebuildNote.textContent = !data.triggered ? ""
+        : swept?.objects
+            ? `Rebuilding. Also removed ${swept.objects} unused object${swept.objects === 1 ? "" : "s"}` +
+              `${swept.bytes ? ` (${(swept.bytes / 1024).toFixed(1)} KB)` : ""}.`
+            : "Rebuilding. Nothing to clean up.";
     await refreshPublications();
     watchSite({ restart: true });
 }

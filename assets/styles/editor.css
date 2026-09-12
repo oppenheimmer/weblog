@@ -229,6 +229,12 @@
 
 .sidebar-section { margin-top: 22px; }
 
+/* Rebuilding is a site-wide action, so it sits under the publication list
+   rather than in the per-post panel, which only appears once a post is
+   selected. Full width so it reads as belonging to the sidebar, not to a row. */
+.sidebar-action { margin-top: 12px; width: 100%; }
+.sidebar-note { margin: 8px 0 0; color: #5d7183; font-size: 0.85rem; line-height: 1.4; }
+
 .publication {
     margin: 4px 0 18px;
     padding: 14px 16px;
