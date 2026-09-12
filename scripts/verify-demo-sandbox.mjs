@@ -100,11 +100,7 @@ const server = http.createServer((req, res) => {
     if (mode.target === "figure-host") {
       return html(`<!doctype html><title>clean</title>
 <div id="figure-root"></div>
-<script>new Image().src = "/hit/figure-host-loaded";</script>
-<script type="module">
-  import * as figure from "${FIGURE_BASE}main.mjs";
-  figure.mount(document.getElementById("figure-root"), { theme: "light" });
-</script>`);
+<script type="module" src="/probe/figure-host.mjs"></script>`);
     }
     // A real page: the renderer's own output for a resolved ::demo, driven by
     // the site's own script. Nothing here is a stand-in except the surrounding
@@ -134,32 +130,7 @@ const server = http.createServer((req, res) => {
 <body class="${bodyClass}">
 ${article}
 <script src="/assets/blog.js"></script>
-<script>
-  // Fired whatever the engine did, so "the page ran" stays separable from
-  // "the engine built a frame". A sentinel that is itself a boundary claim
-  // turns a measured failure into "cannot run" — the mistake 6A already made.
-  new Image().src = "/hit/page-ready";
-
-  // The page's own report of what the engine did, so the oracle is the
-  // rendered result rather than this check's opinion of it.
-  setTimeout(function () {
-    var frame = document.querySelector('figure[data-interactive="demo"] iframe');
-    new Image().src = "/hit/page-frame/" + (frame
-      ? encodeURIComponent(frame.getAttribute("sandbox") + "|" + frame.getAttribute("referrerpolicy"))
-      : "none");
-    if (frame) {
-      setTimeout(function () {
-        new Image().src = "/hit/page-height/" + encodeURIComponent(frame.style.height || "unset");
-      }, 900);
-    }
-    setTimeout(function () {
-      var fig = document.querySelector('figure[data-interactive="figure"]');
-      new Image().src = "/hit/page-figure/" + encodeURIComponent(fig
-        ? [fig.className, (fig.querySelector(".interactive-root") || {}).textContent || ""].join("|")
-        : "absent");
-    }, 900);
-  }, 600);
-</script>`);
+<script src="/probe/page-ready.js"></script>`);
     }
 
     // The one document a figure bundle may contain, opened directly.
@@ -186,6 +157,41 @@ ${article}
     hits.push("asset blog.js");
     return send(200, { "content-type": "text/javascript; charset=utf-8" },
       fs.readFileSync(path.join(ROOT, "assets", "blog.js")));
+  }
+
+  // Probe instrumentation is external because public pages now admit only
+  // exact shipping inline hashes. Keeping the harness's changing code inline
+  // would test that CSP blocks it, not the interactive boundary below.
+  if (pathname === "/probe/figure-host.mjs") {
+    return send(200, { "content-type": "text/javascript; charset=utf-8" }, `
+      new Image().src = "/hit/figure-host-loaded";
+      import * as figure from "${FIGURE_BASE}main.mjs";
+      figure.mount(document.getElementById("figure-root"), { theme: "light" });
+    `);
+  }
+  if (pathname === "/probe/page-ready.js") {
+    return send(200, { "content-type": "text/javascript; charset=utf-8" }, `
+      // Fired whatever the engine did, so "the page ran" stays separable from
+      // "the engine built a frame".
+      new Image().src = "/hit/page-ready";
+      setTimeout(function () {
+        var frame = document.querySelector('figure[data-interactive="demo"] iframe');
+        new Image().src = "/hit/page-frame/" + (frame
+          ? encodeURIComponent(frame.getAttribute("sandbox") + "|" + frame.getAttribute("referrerpolicy"))
+          : "none");
+        if (frame) {
+          setTimeout(function () {
+            new Image().src = "/hit/page-height/" + encodeURIComponent(frame.style.height || "unset");
+          }, 900);
+        }
+        setTimeout(function () {
+          var fig = document.querySelector('figure[data-interactive="figure"]');
+          new Image().src = "/hit/page-figure/" + encodeURIComponent(fig
+            ? [fig.className, (fig.querySelector(".interactive-root") || {}).textContent || ""].join("|")
+            : "absent");
+        }, 900);
+      }, 600);
+    `);
   }
 
   if (pathname.startsWith("/hit/")) {
