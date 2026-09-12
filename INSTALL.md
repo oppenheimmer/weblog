@@ -128,11 +128,25 @@ browser never can.
    Add any other origin you will run the editor from — a preview deployment or
    `http://localhost:4321` — as its own entry.
 4. Add two **object lifecycle rules** (Settings → Object Lifecycle Rules), each
-   deleting objects **1 day after upload**, for the prefixes
-   `prod/rate-limits/` and `prod/sessions/`. These records expire on every read
-   regardless, so the rules are housekeeping rather than a safety control; the
-   application's token cannot manage them, so they too are a dashboard step.
-   Deleting the sessions prefix signs the owner out.
+   deleting objects **1 day after upload**:
+
+   | Rule name | Prefix |
+   | --------- | ------ |
+   | `expire-sessions` | `prod/sessions/` |
+   | `expire-rate-limits` | `prod/rate-limits/` |
+
+   Include the `prod/` segment and the trailing slash; a prefix of `sessions/`
+   matches nothing. These records are refused on read once expired regardless,
+   so the rules are housekeeping rather than a safety control, and the
+   application's token cannot manage them — another dashboard step. Overwriting
+   an object resets its lifecycle clock on R2 (measured), and a session in use
+   is rewritten at most every 5 minutes of activity, so an active session is
+   never deleted from under you.
+
+   To confirm a rule afterwards, write any object under the prefix and read the
+   `x-amz-expiration` response header: it names the matching `rule-id` and the
+   expiry date. That is the only check available, since the token is refused on
+   reading the bucket's lifecycle configuration.
 
 Everything in the bucket lives under a prefix — `prod` in production, `dev`
 locally — so local work cannot touch published data. The prefix is
@@ -304,9 +318,10 @@ revisions per post, unattached uploads 24 hours. It also runs automatically
 after publish, unpublish, rollback and draft discard, and never throws.
 
 Two things it deliberately does **not** collect: expired sessions and
-rate-limit windows, which the R2 lifecycle rules in step 2 delete; and
-publication job records under `<prefix>/publications/`, which currently have no
-retention rule at all and accumulate.
+rate-limit windows, which the R2 lifecycle rules in §2 delete; and publication
+job records under `<prefix>/publications/`, which currently have **no retention
+rule at all** and accumulate — discarding a post leaves its jobs behind, because
+they sit outside the post's own prefixes. Clear them by hand occasionally.
 
 ### Backups
 
