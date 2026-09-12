@@ -105,6 +105,12 @@ jobs:
       - name: The publication panel, against a stand-in site
         run: node scripts/verify-editor.mjs
 
+      # A real file drop and a real clipboard paste, then the editor by
+      # keyboard and through its accessibility tree. Exits 2 if the runner's
+      # browser cannot hold an image on its clipboard.
+      - name: The editor without a mouse, a picker or a screen
+        run: node scripts/verify-editor-access.mjs
+
       - name: A sealed lab stays sealed, framed or opened directly
         run: node scripts/verify-demo-sandbox.mjs
 

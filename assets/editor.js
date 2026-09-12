@@ -72,14 +72,67 @@ const guard = (fn) => async (...args) => {
         if (err.message === "unauthenticated") return; // already reported
         setStatus("failed", "error");
         setError(err.message || "Something went wrong.");
+        markInvalid(err.data?.fields);
     }
 };
 
+/**
+ * Write a status only when it changes.
+ *
+ * Every write to a live region is announced, an identical one included, so a
+ * status set on each keystroke read "unsaved" aloud once per key.
+ */
+function writeText(el, text) {
+    if (el.textContent !== text) el.textContent = text;
+}
+
 const setStatus = (text, kind = "") => {
-    els.saveState.textContent = text;
+    writeText(els.saveState, text);
     els.saveState.dataset.state = kind;
 };
+// Always written: an alert that repeats a refusal should be heard again.
 const setError = (text) => { els.error.textContent = text; };
+
+/**
+ * Busy rather than disabled. A disabled button drops keyboard focus to the
+ * page, so pressing Enter on Save left the author nowhere; a busy one keeps
+ * focus and simply ignores a second press.
+ */
+function setBusy(button, busy) {
+    if (busy) button.setAttribute("aria-disabled", "true");
+    else button.removeAttribute("aria-disabled");
+}
+const isBusy = (button) => button.getAttribute("aria-disabled") === "true";
+
+/**
+ * Mark the fields a refusal names, tie each to the error, and focus the first.
+ *
+ * The server says which field it refused (`fields`); without this the error
+ * was announced but nothing said where. Automatic saves pass `focus: false`,
+ * so an autosave failing never pulls the cursor out of the body.
+ */
+function markInvalid(fields, { focus = true } = {}) {
+    const named = Object.keys(fields ?? {}).filter((name) => FIELDS.includes(name));
+    for (const name of named) {
+        const input = els[name];
+        input.setAttribute("aria-invalid", "true");
+        const describedBy = (input.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+        if (!describedBy.includes("editor-error")) {
+            input.setAttribute("aria-describedby", [...describedBy, "editor-error"].join(" "));
+            input.dataset.errorLinked = "true";
+        }
+    }
+    if (named.length && focus) els[named[0]].focus();
+}
+
+function clearInvalid(input) {
+    input.removeAttribute("aria-invalid");
+    if (!input.dataset.errorLinked) return;
+    delete input.dataset.errorLinked;
+    const rest = (input.getAttribute("aria-describedby") ?? "").split(/\s+/).filter((id) => id && id !== "editor-error");
+    if (rest.length) input.setAttribute("aria-describedby", rest.join(" "));
+    else input.removeAttribute("aria-describedby");
+}
 
 function slugify(value) {
     return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -200,11 +253,12 @@ async function loadDraft(draft, etag) {
     state.version = draft.version;
     state.selected = null;
     writeForm(draft);
+    for (const name of FIELDS) clearInvalid(els[name]);
     state.saved = readForm();
     await loadAttachments();
     setStatus(`saved · v${draft.version}`);
     setError("");
-    els.publishedNote.textContent = "";
+    writeText(els.publishedNote, "");
     await refreshList();
 }
 
@@ -217,11 +271,12 @@ async function newPost() {
     state.version = null;
     state.selected = null;
     writeForm({ date: new Date().toISOString().slice(0, 10) });
+    for (const name of FIELDS) clearInvalid(els[name]);
     state.saved = readForm();
     await loadAttachments();
     setStatus("not saved");
     setError("");
-    els.publishedNote.textContent = "";
+    writeText(els.publishedNote, "");
     await refreshList();
 }
 
@@ -257,7 +312,7 @@ async function save({ force = false, automatic = false } = {}) {
     stopAutosave();
     if (state.saving) return state.savePromise;
     state.saving = true;
-    els.save.disabled = true;
+    setBusy(els.save, true);
     setStatus("saving…");
     setError("");
 
@@ -286,8 +341,7 @@ async function save({ force = false, automatic = false } = {}) {
             // screen may have been typed after the other tab hit save.
             state.conflict = { etag: data.etag, draft: data.current };
             describeConflict(data.current);
-            els.conflict.hidden = false;
-            els.conflictKeep.focus();
+            openConflict();
             setStatus("conflict", "error");
             return false;
         }
@@ -305,11 +359,12 @@ async function save({ force = false, automatic = false } = {}) {
             setError(err.data?.fields
                 ? Object.values(err.data.fields).join(" ")
                 : err.message);
+            markInvalid(err.data?.fields, { focus: !automatic });
         }
         return false;
       } finally {
         state.saving = false;
-        els.save.disabled = false;
+        setBusy(els.save, false);
         state.savePromise = null;
         // Typing can continue while a request is in flight. That newer text is
         // still dirty and deserves its own quiet-period save.
@@ -325,7 +380,7 @@ async function save({ force = false, automatic = false } = {}) {
 
 const IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
 
-const setAttachStatus = (text) => { els.attachStatus.textContent = text; };
+const setAttachStatus = (text) => writeText(els.attachStatus, text);
 
 function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
@@ -574,6 +629,9 @@ function renderAttachments() {
         insert.type = "button";
         insert.className = "button button-secondary button-small";
         insert.textContent = "Insert";
+        // Named for its file: a list of buttons all called "Insert" gives a
+        // screen reader no way to tell which one inserts what.
+        insert.setAttribute("aria-label", `Insert ${attachment.publicName}`);
         insert.addEventListener("click", () => { insertAtCursor(referenceFor(attachment)); els.body.focus(); });
 
         let alt = null;
@@ -592,6 +650,7 @@ function renderAttachments() {
         remove.type = "button";
         remove.className = "button button-danger button-small";
         remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove ${attachment.publicName}`);
         remove.addEventListener("click", guard(() => removeAttachment(attachment)));
 
         actions.append(insert, remove);
@@ -678,7 +737,7 @@ const PREVIEW_DEBOUNCE_MS = 500;
 const PREVIEW_REFRESH_MS = 8 * 60 * 1000;
 
 function setPreviewState(text, kind = "") {
-    els.previewState.textContent = text;
+    writeText(els.previewState, text);
     els.previewState.dataset.state = kind;
 }
 
@@ -850,7 +909,7 @@ function renderPanel() {
     if (!publication) return;
 
     const siteState = publication.site?.state ?? "unknown";
-    els.publicationChip.textContent = SITE_LABELS[siteState];
+    writeText(els.publicationChip, SITE_LABELS[siteState]);
     els.publicationChip.dataset.state = siteState;
 
     const revision = (id) => publication.revisions.find((r) => r.revisionId === id);
@@ -882,7 +941,14 @@ function renderPanel() {
         summary.push(deploymentsLink());
         summary.push(words(", then Rebuild site."));
     }
-    els.publicationSummary.replaceChildren(...summary);
+    // The watch re-renders every few seconds. Replacing identical content
+    // re-announced the whole summary each time, so only a change is written.
+    const summaryKey = JSON.stringify(summary.map((node) =>
+        node.nodeType === Node.TEXT_NODE ? node.textContent : [node.getAttribute("href"), node.textContent]));
+    if (els.publicationSummary.dataset.key !== summaryKey) {
+        els.publicationSummary.replaceChildren(...summary);
+        els.publicationSummary.dataset.key = summaryKey;
+    }
 
     // Rebuilt only when the choices change, so a check every few seconds does
     // not undo a revision the author is in the middle of picking.
@@ -969,9 +1035,25 @@ function reportChange(data) {
     setError(data.hookError ? `${data.hookError}. Use Rebuild site to try again.` : "");
 }
 
+/**
+ * After a panel action, keep keyboard focus in the panel.
+ *
+ * Unpublish hides its own button and a rollback disables its own, and a hidden
+ * or disabled element loses focus to the page. Focus goes to the action now
+ * on offer, or to the revision choice.
+ */
+function keepPanelFocus(hadFocus) {
+    if (!hadFocus) return;
+    const current = document.activeElement;
+    if (current && current !== document.body && !current.disabled && current.checkVisibility()) return;
+    const rollback = els.publicationRollback;
+    (!rollback.disabled && rollback.checkVisibility() ? rollback : els.publicationRevision).focus();
+}
+
 async function unpublishShown() {
     const publication = shownPublication();
     if (!publication?.published) return;
+    const hadFocus = els.publication.contains(document.activeElement);
     if (!confirm(`Take ${nameOf(publication)} off the site? /${publication.slug}/ stops showing it after the rebuild. ` +
         "Its revisions are kept, so it can be put back.")) return;
     const { data } = await api("/api/publish/", {
@@ -979,6 +1061,7 @@ async function unpublishShown() {
     });
     reportChange(data);
     await refreshPublications();
+    keepPanelFocus(hadFocus);
     watchSite({ restart: true });
 }
 
@@ -987,6 +1070,7 @@ async function rollbackShown() {
     const chosen = publication?.revisions.find((r) => r.revisionId === els.publicationRevision.value);
     if (!chosen) return;
     const verb = publication.published ? "Roll back" : "Put back";
+    const hadFocus = els.publication.contains(document.activeElement);
     if (!confirm(`${verb} ${nameOf(publication)} to ${revisionLabel(chosen)}, stored ${formatWhen(chosen.storedAt)}? ` +
         `The site rebuilds to show it at /${publication.slug}/.`)) return;
     const { data } = await api("/api/publish/", {
@@ -994,6 +1078,7 @@ async function rollbackShown() {
     });
     reportChange(data);
     await refreshPublications();
+    keepPanelFocus(hadFocus);
     watchSite({ restart: true });
 }
 
@@ -1011,19 +1096,20 @@ async function branchShown() {
 }
 
 async function rebuildSite() {
-    els.publicationRebuild.disabled = true;
-    setTimeout(() => { els.publicationRebuild.disabled = false; }, REBUILD_PAUSE_MS);
-    els.rebuildNote.textContent = "Rebuilding…";
+    if (isBusy(els.publicationRebuild)) return;
+    setBusy(els.publicationRebuild, true);
+    setTimeout(() => setBusy(els.publicationRebuild, false), REBUILD_PAUSE_MS);
+    writeText(els.rebuildNote, "Rebuilding…");
     const { data } = await api("/api/publish/", { method: "POST", body: { action: "rebuild" } });
     setError(data.triggered ? "" : `The rebuild could not be triggered: ${data.error}`);
     // Rebuilding also sweeps what no post needs any more. Say so only when it
     // actually removed something: "freed 0 KB" is noise on every other click.
     const swept = data.swept;
-    els.rebuildNote.textContent = !data.triggered ? ""
+    writeText(els.rebuildNote, !data.triggered ? ""
         : swept?.objects
             ? `Rebuilding. Also removed ${swept.objects} unused object${swept.objects === 1 ? "" : "s"}` +
               `${swept.bytes ? ` (${(swept.bytes / 1024).toFixed(1)} KB)` : ""}.`
-            : "Rebuilding. Nothing to clean up.";
+            : "Rebuilding. Nothing to clean up.");
     await refreshPublications();
     watchSite({ restart: true });
 }
@@ -1033,31 +1119,32 @@ async function rebuildSite() {
 els.save.addEventListener("click", guard(() => save()));
 
 els.publish.addEventListener("click", guard(async () => {
-    // Publishing freezes a *saved* revision, so save first. Publishing what is
-    // on screen while the store holds something older would put a version live
-    // that the author never saw as saved.
-    if (!state.postId || isDirty()) {
-        await save();
-        if (isDirty()) return; // the save failed; its error is already showing
-    }
-
-    els.publish.disabled = true;
-    els.publishedNote.textContent = "";
-    setStatus("publishing…");
+    if (isBusy(els.publish)) return;
+    setBusy(els.publish, true);
     try {
+        // Publishing freezes a *saved* revision, so save first. Publishing what
+        // is on screen while the store holds something older would put a
+        // version live that the author never saw as saved.
+        if (!state.postId || isDirty()) {
+            await save();
+            if (isDirty()) return; // the save failed; its error is already showing
+        }
+
+        writeText(els.publishedNote, "");
+        setStatus("publishing…");
         const { data } = await api("/api/publish/", {
             method: "POST", body: { postId: state.postId },
         });
         setStatus(`published · v${state.version}`);
         // Published is not live: the panel below says when the site shows it.
-        els.publishedNote.textContent = data.job?.hookError
+        writeText(els.publishedNote, data.job?.hookError
             ? "Published, but the rebuild was not triggered. Use Rebuild site to try again."
-            : "Published. The site is rebuilding.";
+            : "Published. The site is rebuilding.");
         state.selected = null;
         await refreshPublications();
         watchSite({ restart: true });
     } finally {
-        els.publish.disabled = false;
+        setBusy(els.publish, false);
     }
 }));
 els.newPost.addEventListener("click", guard(newPost));
@@ -1100,13 +1187,46 @@ els.logout.addEventListener("click", guard(async () => {
     window.location.href = "/login/";
 }));
 
-els.conflictKeep.addEventListener("click", guard(async () => {
+/**
+ * The conflict dialog, managed like the modal it says it is.
+ *
+ * Focus moves in, stays in, and goes back to what opened it. Escape closes it
+ * without choosing: nothing has been overwritten, and the next save asks again.
+ */
+function openConflict() {
+    const from = document.activeElement;
+    state.conflictReturn = from && from !== document.body && !els.conflict.contains(from) ? from : els.save;
+    els.conflict.hidden = false;
+    els.conflictKeep.focus();
+}
+
+function closeConflict() {
     els.conflict.hidden = true;
+    const back = state.conflictReturn;
+    state.conflictReturn = null;
+    (back?.isConnected ? back : els.save).focus();
+}
+
+els.conflict.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        event.preventDefault();
+        closeConflict();
+        return;
+    }
+    if (event.key !== "Tab") return;
+    const choices = [els.conflictKeep, els.conflictTheirs];
+    const at = choices.indexOf(document.activeElement);
+    event.preventDefault();
+    choices[(at + (event.shiftKey ? -1 : 1) + choices.length) % choices.length].focus();
+});
+
+els.conflictKeep.addEventListener("click", guard(async () => {
+    closeConflict();
     await save({ force: true });
 }));
 
 els.conflictTheirs.addEventListener("click", guard(async () => {
-    els.conflict.hidden = true;
+    closeConflict();
     if (state.conflict?.draft) {
         const loaded = state.conflict.draft;
         writeForm(loaded);
@@ -1120,6 +1240,7 @@ els.conflictTheirs.addEventListener("click", guard(async () => {
 
 for (const id of FIELDS) {
     els[id].addEventListener("input", () => {
+        clearInvalid(els[id]);
         if (id === "title" || id === "slug") updateSlugPreview();
         if (isDirty()) setStatus("unsaved");
         scheduleAutosave();

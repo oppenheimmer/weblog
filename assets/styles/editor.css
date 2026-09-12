@@ -59,6 +59,10 @@
 .field input:focus-visible,
 .field select:focus-visible,
 .field textarea:focus-visible,
+/* A date input's focus lands on its day, month or year segment, inside the
+   control, and :focus-visible never matched the input itself: tabbing through
+   the date showed no ring. */
+.field input[type="date"]:focus-within,
 .button:focus-visible {
     outline: 2px solid #12344d;
     outline-offset: 2px;
@@ -80,7 +84,10 @@
     cursor: pointer;
 }
 .button:hover { opacity: 0.92; }
-.button[disabled] { opacity: 0.5; cursor: not-allowed; }
+.button[disabled],
+/* Busy rather than disabled: a disabled button drops keyboard focus to the
+   page, so Save, Publish and Rebuild site stay focusable while they work. */
+.button[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
 .button-secondary { background: #fff; color: #12344d; }
 .button-danger { background: #fff; color: #b3261e; border-color: rgba(179, 38, 30, 0.4); }
@@ -104,6 +111,8 @@
 .editor-bar-left, .editor-bar-right { display: flex; align-items: center; gap: 10px; }
 .editor-brand { font-weight: 700; text-decoration: none; color: #12344d; }
 .editor-tag {
+    /* The page's one h1, styled as the small tag it always was. */
+    margin: 0; font-family: inherit; font-weight: 600; line-height: 1.4;
     font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
     color: #5d7183; border: 1px solid rgba(18, 52, 77, 0.2);
     border-radius: 999px; padding: 2px 8px;
