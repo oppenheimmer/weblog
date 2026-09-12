@@ -323,6 +323,30 @@ job records under `<prefix>/publications/`, which currently have **no retention
 rule at all** and accumulate — discarding a post leaves its jobs behind, because
 they sit outside the post's own prefixes. Clear them by hand occasionally.
 
+### Quotas worth knowing
+
+The Vercel team is on the **Hobby** plan, and every team-scoped limit is shared
+with the other projects in it. Exceeding an included allowance pauses that
+feature for **30 days**, team-wide — so the limits that matter are the ones an
+outsider can drive, not the ones ordinary writing touches.
+
+| Allowance | Hobby / R2 free tier | What this blog uses |
+| --------- | -------------------- | ------------------- |
+| R2 storage, Class A, Class B | 10 GB, 1M, 10M per month | About 0.1% of Class A in a heavy month |
+| Function invocations, edge requests | 1M each per month | Editor polling and reader traffic; far below |
+| **Active CPU** | **4 CPU-hours per month** | Almost entirely password checks — see below |
+| Deployments | 100 per day, team-wide | One per publish, unpublish, rollback, rebuild or push |
+| Deploy-hook triggers | 60 per hour, per project | Why **Rebuild site** pauses 30 seconds |
+| Runtime logs | kept 1 hour | Read a failed build's log promptly or lose it |
+
+One password verification costs about 257 ms of CPU by design, so the monthly
+allowance is roughly 56,000 of them. The in-app limiter caps anonymous attempts
+at 50 per 15 minutes, which is 4,800 a day — a spray held at that ceiling would
+spend more CPU in a month than the plan includes. Nothing else is close:
+rendering a maths-heavy post costs 4.7 ms. If this ever matters, the fix is a
+Vercel Firewall rate rule on `/api/auth/login/`, because it refuses the request
+before a function starts.
+
 ### Backups
 
 Git holds no content, so R2 is the only copy. Take dated backups with a
