@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
-import { createPublisher, INDEX_KEY } from "../lib/server/publish.mjs";
+import { createPublisher, INDEX_KEY, WRITE_LEASE_MS } from "../lib/server/publish.mjs";
 import { loadPublishedPosts } from "../lib/server/published.mjs";
 import { keys, classifyKey, ownedPrefixes, mediaUrl } from "../lib/server/keys.mjs";
 import { computeRevisionId, validateManifest } from "../lib/interactives.mjs";
@@ -663,4 +663,114 @@ test("ownedPrefixes covers attachment keys too", () => {
   ]) {
     assert.ok(prefixes.some((p) => key.startsWith(p)), `${key} is not under any owned prefix`);
   }
+});
+
+// ------------------------------------------------ a sweep racing a publish
+
+/**
+ * A store that lets the test stop one call mid-flight.
+ *
+ * The sweep runs with `apply: true` after every publish, unpublish and
+ * discard, so "a collection running while a publish is between its writes" is
+ * not a hypothetical: it is the ordinary state of this system under two
+ * overlapping actions. What protects the in-flight publish is the age floor —
+ * nothing younger than an hour is swept — and that guard has never been
+ * measured against an actual interleaving.
+ */
+function pausableStore(store, { on, hold }) {
+  return {
+    ...store,
+    async mutateJson(key, ...rest) {
+      if (key === on) await hold();
+      return store.mutateJson(key, ...rest);
+    },
+  };
+}
+
+test("a sweep running mid-publish cannot delete what the publish is writing", async () => {
+  const { store, client } = harness();
+  const drafts = createDraftStore(store);
+  const created = await drafts.create({ title: "Racing", body: "text", slug: "racing" });
+  const postId = created.draft.postId;
+
+  // The worst case for the age floor: a post with no draft pointer looks
+  // orphaned, so its whole prefix is collectable on state alone. Only the
+  // floor keeps an in-flight publish's objects.
+  await store.delete(keys.draftPointer(postId));
+
+  let release;
+  const paused = new Promise((resolve) => { release = resolve; });
+  let sweptDuringPublish = null;
+
+  const racing = createPublisher(
+    pausableStore(store, { on: INDEX_KEY, hold: () => paused }),
+    { fireDeployHook: async () => ({}), housekeep: async () => ({ ok: true, swept: { deleted: 0, bytesFreed: 0 } }) }
+  );
+
+  const publishing = racing.publish(complete({
+    postId, slug: "racing", revisionId: created.draft.revisionId, title: "Racing",
+  }));
+
+  // The publish is now holding at its commit point, with its revision already
+  // written. Sweep the whole bucket for real, then let it finish.
+  sweptDuringPublish = await collectGarbage(store, { apply: true });
+  release();
+  const job = await publishing;
+
+  // writing -> published -> building (Step 7): `building` is what a publish
+  // that got past its commit point and fired the hook looks like.
+  assert.ok(["published", "building"].includes(job.state),
+    `the publish did not survive a concurrent sweep: ${job.state} ${job.error ?? ""}`);
+  assert.deepEqual(sweptDuringPublish.keys, [],
+    `a sweep deleted objects belonging to a publish in flight: ${sweptDuringPublish.keys.join(", ")}`);
+
+  const posts = await loadPublishedPosts({ store });
+  assert.deepEqual(posts.map((p) => p.slug), ["racing"]);
+  assert.ok(await store.getJson(keys.publishedRevision(postId, created.draft.revisionId)),
+    "the revision the index now names was swept from under it");
+
+  // And the guard that did it is the age floor, not luck: age everything past
+  // the floor and the same sweep empties the same post.
+  backdate(client, "", 400 * DAY);
+  await store.mutateJson(INDEX_KEY, (index) => ({ ...index, posts: {} }));
+  const after = await collectGarbage(store, { apply: false });
+  assert.ok(after.deletable > 0, "the sweep was never capable of deleting these objects");
+});
+
+test("the age floor is longer than the lease a publish may resume after", async () => {
+  // The floor is not an arbitrary hour. A publish interrupted past its media
+  // writes is resumed by the next Publish of that revision once its ten-minute
+  // lease has passed (Step 6), so between those two moments its objects are
+  // *already older than the lease* and still in flight. A floor shorter than
+  // the lease would let a sweep delete them in exactly that window.
+  assert.ok(RETENTION.minAgeMs > WRITE_LEASE_MS,
+    `the sweep floor (${RETENTION.minAgeMs} ms) is not longer than the publish lease (${WRITE_LEASE_MS} ms)`);
+
+  const { store, client } = harness();
+  const drafts = createDraftStore(store);
+  const created = await drafts.create({ title: "Resumed", body: "text", slug: "resumed" });
+  const postId = created.draft.postId;
+  await store.delete(keys.draftPointer(postId));
+
+  let release;
+  const paused = new Promise((resolve) => { release = resolve; });
+  const racing = createPublisher(
+    pausableStore(store, { on: INDEX_KEY, hold: () => paused }),
+    { fireDeployHook: async () => ({}), housekeep: async () => ({ ok: true, swept: { deleted: 0, bytesFreed: 0 } }) }
+  );
+  const publishing = racing.publish(complete({
+    postId, slug: "resumed", revisionId: created.draft.revisionId, title: "Resumed",
+  }));
+
+  // Age what the publish has already written past the lease, which is what a
+  // resumed publish looks like from the outside, and sweep.
+  backdate(client, "", WRITE_LEASE_MS + 60_000);
+  const swept = await collectGarbage(store, { apply: true });
+  release();
+  await publishing;
+
+  assert.deepEqual(swept.keys, [],
+    `a sweep deleted a resumed publish's objects: ${swept.keys.join(", ")}`);
+  assert.ok(await store.getJson(keys.publishedRevision(postId, created.draft.revisionId)),
+    "the revision a resumed publish had already written was swept");
 });
