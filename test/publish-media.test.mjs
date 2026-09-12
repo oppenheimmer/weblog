@@ -76,6 +76,28 @@ test("publishing freezes final image paths into the revision", async () => {
   }]);
 });
 
+test("editing a publication-only revision keeps the images whose public URLs remain", async () => {
+  const h = harness();
+  const postId = await newDraft(h);
+  const image = await attach(h, postId, PNG, { name: "diagram.png" });
+  const first = await withBody(h, postId, `![A diagram](attachment://${image.id})`);
+  await h.publisher.publish(first);
+
+  // Model a migrated/publication-only post: the immutable public revision and
+  // media remain, while no draft pointer or private attachment remains.
+  await h.store.delete(keys.draftPointer(postId));
+  await h.store.delete(keys.attachmentRecord(postId, image.id));
+  await h.store.delete(keys.attachmentBlob(postId, image.publicName));
+  const branched = await h.drafts.branchPublished(postId, first.revisionId);
+  const edited = (await h.drafts.save(postId, { body: `${branched.draft.body}\n\nEdited.` }, branched.etag)).draft;
+  await h.publisher.publish(edited);
+
+  const revision = await revisionOf(h, edited);
+  assert.match(revision.body, /\/images\/uploads\/media-post\/diagram\.png/);
+  assert.deepEqual(revision.media.map((item) => item.publicName), ["diagram.png"]);
+  assert.ok(await h.store.get(keys.media(postId, "diagram.png")), "the inherited public image was lost");
+});
+
 test("every image is in place before the index names the revision", async () => {
   // The index update is the commit point; a build may start the moment it
   // lands. An image copied after it is an image a build can miss. Watched at

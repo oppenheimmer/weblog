@@ -24,9 +24,15 @@ troubleshooting.
 ## Write a post
 
 Sign in at **`/login/`** and write at **`/editor/`**. Fill in the fields, write
-the body, Save, then Publish. Publishing freezes the saved revision into R2 and
+the body, then Publish. Changes autosave after a short quiet period; **Save** is
+still available for an immediate checkpoint. Publishing freezes the saved revision into R2 and
 triggers a rebuild; the post appears at `/<slug>/` a minute or so later. There
 is no repository step and no terminal step.
+
+Pasting a complete document beginning with `---` imports its title, date, slug,
+description, tags, format and body. **Import source** does the same for `.md`,
+`.markdown` and `.tex` files (and infers LaTeX from `.tex`). Browser-authored
+documents cannot import engine-only script, style, head or Distill hooks.
 
 | Field       | Required | Notes                                                    |
 | ----------- | -------- | -------------------------------------------------------- |
@@ -70,6 +76,9 @@ that instead. From the same panel:
 - **Roll back** puts a stored revision back on the site; for an unpublished post
   the same button reads **Put back**. After a reload it still defaults to the
   revision last shown, even when a newer stored revision exists.
+- **Edit as draft** branches the selected stored revision when a migrated or
+  otherwise publication-only post has no draft. Its post identity and retained
+  public media stay with it.
 - **Rebuild site** rebuilds without changing any post, and sweeps what nothing
   needs any more — superseded revisions past the rollback window, abandoned
   uploads, orphaned media — reporting what it removed. It sits beside the list
@@ -134,7 +143,10 @@ sitemap automatically.
 Attach files in the editor with the attach button, by pasting, or by dropping
 them on the page. The editor inserts the reference for the post's format, on a
 line of its own so an image never lands mid-sentence; the **Insert** button in
-the attachment list still inserts exactly at the cursor:
+the attachment list still inserts exactly at the cursor. An image row has an
+editable alt-text field used by Insert. If source names an attachment that is
+gone, the relinker offers verified attachments of the same kind and leaves
+reference-looking examples inside code alone:
 
 | Attachment     | Markdown                    | LaTeX                                    |
 | -------------- | --------------------------- | ---------------------------------------- |
@@ -292,7 +304,7 @@ not `chromium-browser`:
 ```bash
 node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
-node scripts/verify-editor.mjs           # the On the site panel, against a stand-in site
+node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
 ```
 
 `.github/workflows/ci.yml` runs the suite and a credential-free build on every

@@ -76,6 +76,40 @@ test("drafts survive a cold restart — nothing is held in memory", async () => 
   assert.equal(read.draft.title, "Persisted");
 });
 
+test("a stored published revision can become an editable draft of the same post", async () => {
+  const { drafts, store } = newDrafts();
+  const postId = "p_00000000000000ab";
+  const publishedRevisionId = newRevisionId(7);
+  await store.putJson(`published/posts/${postId}/${publishedRevisionId}.json`, {
+    schemaVersion: 1, postId, revisionId: publishedRevisionId, draftVersion: 7,
+    title: "Back from the site", date: "2026-09-13", description: "kept", tags: ["one"],
+    format: "markdown", slug: "back-from-the-site", body: "Published body.", publishedAt: "2026-09-13T00:00:00Z",
+  });
+
+  const branched = await drafts.branchPublished(postId, publishedRevisionId);
+  assert.equal(branched.created, true);
+  assert.equal(branched.draft.postId, postId, "branching changed the post identity");
+  assert.equal(branched.draft.version, 8);
+  assert.equal(branched.draft.publishedRevisionId, publishedRevisionId);
+  assert.equal(branched.draft.body, "Published body.");
+
+  const repeated = await drafts.branchPublished(postId, publishedRevisionId);
+  assert.equal(repeated.created, false);
+  assert.equal(repeated.draft.revisionId, branched.draft.revisionId, "a second branch forked the draft");
+});
+
+test("branching refuses a revision from another post or one that does not exist", async () => {
+  const { drafts, store } = newDrafts();
+  const postId = "p_00000000000000ab";
+  const otherPostId = "p_00000000000000cd";
+  const revisionId = newRevisionId(1);
+  await store.putJson(`published/posts/${postId}/${revisionId}.json`, {
+    postId: otherPostId, revisionId, title: "Wrong owner", date: "2026-09-13", format: "markdown", body: "x",
+  });
+  await assert.rejects(() => drafts.branchPublished(postId, revisionId), (err) => err.status === 404);
+  await assert.rejects(() => drafts.branchPublished(postId, "../../escape"), DraftError);
+});
+
 test("saving bumps the version and preserves untouched fields", async () => {
   const { drafts } = newDrafts();
   const created = await drafts.create({ title: "Draft", body: "one", tags: ["a"] });

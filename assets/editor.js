@@ -17,13 +17,17 @@ const els = {
     conflictDetail: $("conflict-detail"), conflictNote: $("conflict-note"),
     attach: $("attach"), attachInput: $("attach-input"),
     attachmentList: $("attachment-list"), attachStatus: $("attach-status"),
+    importSource: $("import-source"), importSourceInput: $("import-source-input"),
+    relinkTools: $("relink-tools"), unresolvedReference: $("unresolved-reference"),
+    relinkAttachment: $("relink-attachment"), relink: $("relink"),
     writing: $("writing"), previewToggle: $("preview-toggle"), previewPane: $("preview-pane"),
     previewFrame: $("preview-frame"), previewState: $("preview-state"), diagnostics: $("diagnostics"),
     publicationList: $("publication-list"), publicationEmpty: $("publication-empty"),
     publication: $("publication"), publicationChip: $("publication-chip"),
     publicationSummary: $("publication-summary"), publicationRevision: $("publication-revision"),
     publicationRollback: $("publication-rollback"), publicationRebuild: $("publication-rebuild"),
-    publicationUnpublish: $("publication-unpublish"), rebuildNote: $("rebuild-note"),
+    publicationBranch: $("publication-branch"), publicationUnpublish: $("publication-unpublish"),
+    rebuildNote: $("rebuild-note"),
 };
 
 const state = {
@@ -36,7 +40,10 @@ const state = {
     version: null,
     conflict: null,
     saving: false,
+    savePromise: null,
+    autosave: { timer: null },
     attachments: [],
+    attachmentAlts: new Map(),
     drafts: [],
     preview: { open: false, seq: 0, controller: null, timer: null, refresher: null, lastKey: null },
     // What the site shows. `selected` is a post picked from "On the site" whose
@@ -135,6 +142,11 @@ function writeForm(draft) {
     updateSlugPreview();
 }
 
+function stopAutosave() {
+    clearTimeout(state.autosave.timer);
+    state.autosave.timer = null;
+}
+
 function updateSlugPreview() {
     const slug = els.slug.value ? slugify(els.slug.value) : slugify(els.title.value);
     els.slugPreview.textContent = slug ? `/${slug}/` : "";
@@ -175,23 +187,31 @@ async function refreshList() {
 }
 
 async function openDraft(postId) {
+    if (state.savePromise) await state.savePromise;
     if (isDirty() && !confirm("This draft has unsaved changes. Discard them?")) return;
     const { data } = await api(`/api/drafts/${postId}/`);
-    state.postId = data.draft.postId;
-    state.etag = data.etag;
-    state.version = data.draft.version;
+    await loadDraft(data.draft, data.etag);
+}
+
+async function loadDraft(draft, etag) {
+    stopAutosave();
+    state.postId = draft.postId;
+    state.etag = etag;
+    state.version = draft.version;
     state.selected = null;
-    writeForm(data.draft);
+    writeForm(draft);
     state.saved = readForm();
     await loadAttachments();
-    setStatus(`saved · v${data.draft.version}`);
+    setStatus(`saved · v${draft.version}`);
     setError("");
     els.publishedNote.textContent = "";
     await refreshList();
 }
 
 async function newPost() {
+    if (state.savePromise) await state.savePromise;
     if (isDirty() && !confirm("This draft has unsaved changes. Discard them?")) return;
+    stopAutosave();
     state.postId = null;
     state.etag = null;
     state.version = null;
@@ -225,14 +245,24 @@ function describeConflict(current) {
         `use Export first if you might want it back.`;
 }
 
-async function save({ force = false } = {}) {
-    if (state.saving) return;
+const AUTOSAVE_DEBOUNCE_MS = 1200;
+
+function scheduleAutosave() {
+    stopAutosave();
+    if (!isDirty() || state.conflict) return;
+    state.autosave.timer = setTimeout(() => { save({ automatic: true }); }, AUTOSAVE_DEBOUNCE_MS);
+}
+
+async function save({ force = false, automatic = false } = {}) {
+    stopAutosave();
+    if (state.saving) return state.savePromise;
     state.saving = true;
     els.save.disabled = true;
     setStatus("saving…");
     setError("");
 
-    try {
+    state.savePromise = (async () => {
+      try {
         const fields = readForm();
 
         if (!state.postId) {
@@ -243,7 +273,7 @@ async function save({ force = false } = {}) {
             state.saved = fields;
             setStatus(`saved · v${data.draft.version}`);
             await refreshList();
-            return;
+            return true;
         }
 
         const { res, data } = await api(`/api/drafts/${state.postId}/`, {
@@ -259,7 +289,7 @@ async function save({ force = false } = {}) {
             els.conflict.hidden = false;
             els.conflictKeep.focus();
             setStatus("conflict", "error");
-            return;
+            return false;
         }
 
         state.etag = data.etag;
@@ -268,6 +298,7 @@ async function save({ force = false } = {}) {
         state.conflict = null;
         setStatus(`saved · v${data.draft.version}`);
         await refreshList();
+        return true;
     } catch (err) {
         if (err.message !== "unauthenticated") {
             setStatus("not saved", "error");
@@ -275,10 +306,19 @@ async function save({ force = false } = {}) {
                 ? Object.values(err.data.fields).join(" ")
                 : err.message);
         }
-    } finally {
+        return false;
+      } finally {
         state.saving = false;
         els.save.disabled = false;
-    }
+        state.savePromise = null;
+        // Typing can continue while a request is in flight. That newer text is
+        // still dirty and deserves its own quiet-period save.
+        if (isDirty() && !state.conflict) scheduleAutosave();
+      }
+    })();
+    const saved = await state.savePromise;
+    if (automatic && saved && !isDirty()) setStatus(`autosaved · v${state.version}`);
+    return saved;
 }
 
 // ---------------------------------------------------------------- attachments
@@ -298,6 +338,173 @@ function altFromName(name) {
     return String(name || "image").replace(/\.[^.]*$/, "").replace(/[-_]+/g, " ").trim() || "image";
 }
 
+function unquoteFrontmatter(value) {
+    const text = value.trim();
+    if (text.startsWith('"') && text.endsWith('"')) {
+        try { return JSON.parse(text); } catch { return text.slice(1, -1); }
+    }
+    if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1).replace(/''/g, "'");
+    return text;
+}
+
+function frontmatterTags(value) {
+    const text = value.trim();
+    const inside = text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1) : text;
+    return inside.split(",").map(unquoteFrontmatter).map((tag) => tag.trim()).filter(Boolean);
+}
+
+/** The safe author-facing subset; engine-only frontmatter hooks are ignored. */
+function parseSourceDocument(source) {
+    const text = String(source).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+    if (!text.startsWith("---\n")) return { fields: {}, body: text, frontmatter: false };
+    const end = text.indexOf("\n---\n", 4);
+    if (end < 0) throw new Error("The frontmatter starts with ---, but has no closing --- line.");
+
+    const fields = {};
+    for (const line of text.slice(4, end).split("\n")) {
+        if (!line.trim() || /^\s*#/.test(line)) continue;
+        const match = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
+        if (!match) throw new Error(`Frontmatter line is not a simple field: ${line}`);
+        const key = match[1];
+        if (!["title", "date", "slug", "description", "tags", "format"].includes(key)) continue;
+        fields[key] = key === "tags" ? frontmatterTags(match[2]) : unquoteFrontmatter(match[2]);
+    }
+    if (fields.format && !["markdown", "latex"].includes(fields.format)) {
+        throw new Error("Frontmatter format must be markdown or latex.");
+    }
+    return { fields, body: text.slice(end + 5), frontmatter: true };
+}
+
+function importDocument(source, { format } = {}) {
+    const imported = parseSourceDocument(source);
+    const fields = imported.fields;
+    for (const id of ["title", "date", "slug", "description"]) {
+        if (fields[id] !== undefined) els[id].value = fields[id];
+    }
+    if (fields.tags !== undefined) els.tags.value = fields.tags.join(", ");
+    els.format.value = fields.format ?? format ?? els.format.value;
+    els.body.value = imported.body;
+    updateSlugPreview();
+    els.body.dispatchEvent(new Event("input", { bubbles: true }));
+    setError("");
+    setAttachStatus(imported.frontmatter ? "Imported frontmatter and source." : "Imported source.");
+}
+
+const escapePattern = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function codeRanges(source, format) {
+    const ranges = [];
+    if (format === "latex") {
+        for (const match of source.matchAll(/\\begin\{(verbatim|lstlisting|minted|Verbatim)\*?\}[\s\S]*?\\end\{\1\*?\}/g)) {
+            ranges.push([match.index, match.index + match[0].length]);
+        }
+        for (const match of source.matchAll(/\\verb\*?(\S)/g)) {
+            const close = source.indexOf(match[1], match.index + match[0].length);
+            ranges.push([match.index, close < 0 ? source.length : close + 1]);
+        }
+    } else {
+        const fence = /^[ \t]*(`{3,}|~{3,})[^\n]*\n?/gm;
+        let match;
+        while ((match = fence.exec(source)) !== null) {
+            const marker = match[1];
+            const close = new RegExp(`^[ \\t]*${marker[0]}{${marker.length},}[ \\t]*$`, "m")
+                .exec(source.slice(match.index + match[0].length));
+            const end = close
+                ? match.index + match[0].length + close.index + close[0].length
+                : source.length;
+            ranges.push([match.index, end]);
+            fence.lastIndex = end;
+        }
+        for (const span of source.matchAll(/(`+)(?:[^`]|(?!\1)`)*\1/g)) {
+            ranges.push([span.index, span.index + span[0].length]);
+        }
+    }
+    return ranges;
+}
+
+const inCode = (ranges, index) => ranges.some(([start, end]) => index >= start && index < end);
+
+function replaceSourceReferences(pattern, replacer) {
+    const source = els.body.value;
+    const ranges = codeRanges(source, els.format.value);
+    let result = "";
+    let last = 0;
+    for (const match of source.matchAll(pattern)) {
+        if (inCode(ranges, match.index)) continue;
+        result += source.slice(last, match.index) + replacer(match);
+        last = match.index + match[0].length;
+    }
+    els.body.value = result + source.slice(last);
+}
+
+/** References the editor can repair, paired with the attachment kind they need. */
+function sourceReferences() {
+    const body = els.body.value;
+    const ranges = codeRanges(body, els.format.value);
+    const found = [];
+    const add = (kind, pattern, id = (match) => match[1]) => {
+        for (const match of body.matchAll(pattern)) {
+            if (!inCode(ranges, match.index)) found.push({ kind, id: id(match) });
+        }
+    };
+    if (els.format.value === "latex") {
+        add("image", /\\includegraphics\s*(?:\[[^\]]*\])?\s*\{\s*attachments\/([^}]*?)\s*\}/g,
+            (match) => match[1].replace(/\.[A-Za-z0-9]+$/, ""));
+        add("tex", /\\input\s*\{\s*attachments\/([^}]*?)\s*\}/g,
+            (match) => match[1].replace(/\.[A-Za-z0-9]+$/, ""));
+    } else {
+        add("image", /attachment:\/\/([^\s)\]]*)/g);
+        add("tex", /::tex\[([^\]]*)\]/g);
+    }
+    const known = new Set(state.attachments.map((attachment) => attachment.id));
+    return [...new Map(found.filter((item) => !known.has(item.id))
+        .map((item) => [`${item.kind}:${item.id}`, item])).values()];
+}
+
+function renderRelinking() {
+    const missing = sourceReferences();
+    const oldChoice = els.unresolvedReference.value;
+    els.unresolvedReference.replaceChildren(...missing.map((item) => {
+        const option = document.createElement("option");
+        option.value = `${item.kind}:${item.id}`;
+        option.textContent = `${item.id} (${item.kind === "tex" ? "TeX" : "image"})`;
+        return option;
+    }));
+    if (missing.some((item) => `${item.kind}:${item.id}` === oldChoice)) els.unresolvedReference.value = oldChoice;
+
+    const selected = missing.find((item) => `${item.kind}:${item.id}` === els.unresolvedReference.value) ?? missing[0];
+    const choices = state.attachments.filter((attachment) => attachment.kind === selected?.kind);
+    els.relinkAttachment.replaceChildren(...choices.map((attachment) => {
+        const option = document.createElement("option");
+        option.value = attachment.id;
+        option.textContent = attachment.publicName;
+        return option;
+    }));
+    els.relinkTools.hidden = !selected || choices.length === 0;
+}
+
+function relinkReference() {
+    const [kind, ...parts] = els.unresolvedReference.value.split(":");
+    const oldId = parts.join(":");
+    const replacement = state.attachments.find((attachment) => attachment.id === els.relinkAttachment.value);
+    if (!oldId || !replacement || replacement.kind !== kind) return;
+    const old = escapePattern(oldId);
+    if (els.format.value === "latex") {
+        const pattern = kind === "tex"
+            ? new RegExp(`(\\\\input\\{attachments\\/)${old}((?:\\.tex)?\\})`, "g")
+            : new RegExp(`(\\\\includegraphics(?:\\[[^\\]]*\\])?\\{attachments\\/)${old}(?:\\.[^}]+)?(\\})`, "g");
+        const suffix = kind === "tex" ? ".tex" : `.${replacement.publicName.split(".").pop()}`;
+        replaceSourceReferences(pattern, (match) => `${match[1]}${replacement.id}${suffix}${match[2]}`);
+    } else {
+        const pattern = kind === "tex"
+            ? new RegExp(`(::tex\\[)${old}(\\])`, "g")
+            : new RegExp(`(attachment:\\/\\/)${old}(?=[\\s)\\]])`, "g");
+        replaceSourceReferences(pattern, (match) => `${match[1]}${replacement.id}${match[2] ?? ""}`);
+    }
+    els.body.dispatchEvent(new Event("input", { bubbles: true }));
+    setAttachStatus(`Relinked ${oldId} to ${replacement.publicName}.`);
+}
+
 /** The reference to type into the body, in whichever format the post is written. */
 function referenceFor(attachment) {
     const latex = els.format.value === "latex";
@@ -307,7 +514,8 @@ function referenceFor(attachment) {
     const ext = attachment.publicName.split(".").pop();
     return latex
         ? `\\includegraphics{attachments/${attachment.id}.${ext}}`
-        : `![${altFromName(attachment.originalName || attachment.publicName)}](attachment://${attachment.id})`;
+        : `![${String(state.attachmentAlts.get(attachment.id) ?? altFromName(attachment.originalName || attachment.publicName))
+            .replace(/\\/g, "\\\\").replace(/\]/g, "\\]")}](attachment://${attachment.id})`;
 }
 
 function insertAtCursor(text) {
@@ -333,6 +541,7 @@ function insertOnOwnLine(text) {
 
 async function loadAttachments() {
     state.attachments = [];
+    state.attachmentAlts.clear();
     if (state.postId) {
         const { data } = await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}`);
         state.attachments = data.attachments ?? [];
@@ -367,6 +576,18 @@ function renderAttachments() {
         insert.textContent = "Insert";
         insert.addEventListener("click", () => { insertAtCursor(referenceFor(attachment)); els.body.focus(); });
 
+        let alt = null;
+        if (attachment.kind === "image" && els.format.value === "markdown") {
+            alt = document.createElement("label");
+            alt.className = "attachment-alt";
+            const input = document.createElement("input");
+            input.type = "text";
+            input.value = state.attachmentAlts.get(attachment.id) ?? altFromName(attachment.originalName || attachment.publicName);
+            input.setAttribute("aria-label", `Alt text for ${attachment.publicName}`);
+            input.addEventListener("input", () => state.attachmentAlts.set(attachment.id, input.value));
+            alt.append(input);
+        }
+
         const remove = document.createElement("button");
         remove.type = "button";
         remove.className = "button button-danger button-small";
@@ -374,9 +595,10 @@ function renderAttachments() {
         remove.addEventListener("click", guard(() => removeAttachment(attachment)));
 
         actions.append(insert, remove);
-        li.append(name, meta, actions);
+        li.append(name, meta, ...(alt ? [alt] : []), actions);
         els.attachmentList.append(li);
     }
+    renderRelinking();
     // The preview shows attachments, so a change to them is a change to it.
     schedulePreview();
 }
@@ -699,6 +921,8 @@ function renderPanel() {
 
     els.publicationRollback.textContent = publication.published ? "Roll back to this revision" : "Put back on the site";
     els.publicationRollback.disabled = !select.value || select.value === publication.revisionId;
+    els.publicationBranch.hidden = state.drafts.some((draft) => draft.postId === publication.postId);
+    els.publicationBranch.disabled = !select.value;
     els.publicationUnpublish.hidden = !publication.published;
 }
 
@@ -773,6 +997,19 @@ async function rollbackShown() {
     watchSite({ restart: true });
 }
 
+async function branchShown() {
+    const publication = shownPublication();
+    const revisionId = els.publicationRevision.value;
+    if (!publication || !revisionId) return;
+    if (state.savePromise) await state.savePromise;
+    if (isDirty() && !confirm("This draft has unsaved changes. Discard them and edit the published post?")) return;
+    const { data } = await api("/api/drafts/", {
+        method: "POST", body: { action: "branch", postId: publication.postId, revisionId },
+    });
+    await loadDraft(data.draft, data.etag);
+    setStatus(data.created ? "draft created from published revision" : `saved · v${data.draft.version}`);
+}
+
 async function rebuildSite() {
     els.publicationRebuild.disabled = true;
     setTimeout(() => { els.publicationRebuild.disabled = false; }, REBUILD_PAUSE_MS);
@@ -826,6 +1063,7 @@ els.publish.addEventListener("click", guard(async () => {
 els.newPost.addEventListener("click", guard(newPost));
 
 els.discard.addEventListener("click", guard(async () => {
+    if (state.savePromise) await state.savePromise;
     if (!state.postId) return newPost();
     if (!confirm("Delete this draft and all its revisions? This cannot be undone.")) return;
     await api(`/api/drafts/${state.postId}/`, { method: "DELETE" });
@@ -884,18 +1122,36 @@ for (const id of FIELDS) {
     els[id].addEventListener("input", () => {
         if (id === "title" || id === "slug") updateSlugPreview();
         if (isDirty()) setStatus("unsaved");
+        scheduleAutosave();
         schedulePreview();
+        if (id === "body") renderRelinking();
+        if (id === "format") renderAttachments();
     });
 }
 
 els.previewToggle.addEventListener("click", () => setPreviewOpen(!state.preview.open));
 
 els.publicationRevision.addEventListener("change", () => renderPanel());
+els.publicationBranch.addEventListener("click", guard(branchShown));
 els.publicationRollback.addEventListener("click", guard(rollbackShown));
 els.publicationRebuild.addEventListener("click", guard(rebuildSite));
 els.publicationUnpublish.addEventListener("click", guard(unpublishShown));
 
 els.attach.addEventListener("click", () => els.attachInput.click());
+els.importSource.addEventListener("click", () => els.importSourceInput.click());
+
+els.importSourceInput.addEventListener("change", guard(async () => {
+    const file = els.importSourceInput.files[0];
+    els.importSourceInput.value = "";
+    if (!file) return;
+    if (file.size > 1_000_000) throw new Error("Source files must be 1 MB or smaller.");
+    if (isDirty() && !confirm("Replace the fields and body on this screen with the imported file?")) return;
+    const format = /\.tex$/i.test(file.name) ? "latex" : "markdown";
+    importDocument(await file.text(), { format });
+}));
+
+els.unresolvedReference.addEventListener("change", renderRelinking);
+els.relink.addEventListener("click", relinkReference);
 
 els.attachInput.addEventListener("change", guard(async () => {
     const files = [...els.attachInput.files];
@@ -907,9 +1163,16 @@ els.attachInput.addEventListener("change", guard(async () => {
 // drop never happen alongside the upload.
 els.body.addEventListener("paste", guard(async (event) => {
     const files = [...(event.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
-    if (!files.length) return;
-    event.preventDefault();
-    await attachFiles(files);
+    if (files.length) {
+        event.preventDefault();
+        await attachFiles(files);
+        return;
+    }
+    const text = event.clipboardData?.getData("text/plain") ?? "";
+    if (text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").startsWith("---\n")) {
+        event.preventDefault();
+        importDocument(text);
+    }
 }));
 
 els.body.addEventListener("dragover", (event) => {

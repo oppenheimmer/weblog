@@ -1,5 +1,5 @@
 // GET  /api/drafts/  — list draft summaries
-// POST /api/drafts/  — create a draft
+// POST /api/drafts/  — create a draft, or branch one from a published revision
 import { createDraftStore } from "../../lib/server/drafts.mjs";
 import { route, readJsonBody, sendJson } from "../../lib/server/http.mjs";
 
@@ -11,6 +11,11 @@ export default route(async ({ req, res, store }) => {
   }
 
   const body = await readJsonBody(req);
+  if (body?.action === "branch") {
+    const result = await drafts.branchPublished(body.postId, body.revisionId);
+    res.setHeader("etag", result.etag);
+    return sendJson(res, result.created ? 201 : 200, result);
+  }
   const { draft, etag } = await drafts.create(body ?? {});
   // The ETag is the client's token for its next save; without it the save is
   // refused rather than allowed to clobber.

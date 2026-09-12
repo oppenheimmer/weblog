@@ -275,14 +275,18 @@ There is no repository step and no terminal step.
 
 1. Sign in at **`/login/`**, write at **`/editor/`**.
 2. Fill in title, date and format; slug, description and tags are optional.
+   A whole document pasted with `---` frontmatter imports those safe fields and
+   its body; **Import source** accepts `.md`, `.markdown` and `.tex` files.
    Attach images or `.tex` snippets with the attach button, by pasting, or by
    dropping them on the page. Each attachment's reference is inserted on a line
-   of its own.
+   of its own. Image alt text is editable before Insert, and a missing reference
+   can be relinked to a verified attachment of the same kind.
 3. **Preview** renders the fields as they would publish, in a sandboxed frame.
    Its errors are exactly what publishing would refuse; render warnings — an
    unsupported LaTeX command, a formula that did not parse — never block
    publishing.
-4. **Save**, then **Publish**. Publishing freezes the saved revision into R2,
+4. Changes autosave after a short quiet period; **Save** makes an immediate
+   checkpoint. **Publish** saves first, freezes that revision into R2,
    updates the published index, and fires the deploy hook.
 5. **On the site** reads the live build manifest back and reports Live, Not live
    yet, Updating, Coming down, Unpublished or Not checked. It keeps checking —
@@ -292,7 +296,8 @@ There is no repository step and no terminal step.
 From the same panel: **Unpublish** takes a post off the site while keeping its
 revisions, and **Roll back** (or **Put back**) puts a stored revision on the
 site. Put back defaults to the revision last shown, including after an editor
-reload. **Rebuild site** sits beside the publication list rather than in the
+reload. A publication-only post offers **Edit as draft**, which branches the
+selected stored revision under the same post identity. **Rebuild site** sits beside the publication list rather than in the
 panel, since it is about the site and not a post, and is offered even when
 nothing is published. It rebuilds and sweeps what nothing needs any more,
 reporting what it removed; it pauses 30 seconds after a click, to stay inside
@@ -457,7 +462,7 @@ recorded, which points at the deployment list.
 ```bash
 node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
-node scripts/verify-editor.mjs           # the On the site panel, against a stand-in site
+node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
 ```
 
 Those drive Chromium over the DevTools protocol; set `CHROMIUM` if the binary is

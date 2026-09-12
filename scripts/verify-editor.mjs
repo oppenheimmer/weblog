@@ -31,6 +31,13 @@ import { createFakeS3, FAKE_CONFIG } from "../test/helpers/fake-r2.mjs";
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SHOTS = process.argv.includes("--shots") ? process.argv[process.argv.indexOf("--shots") + 1] : null;
 const PASSWORD = "a-local-passphrase";
+const SAMPLE_PNG = fs.readFileSync(path.join(ROOT, "test/fixtures/assets/images/diagram.png")).toString("base64");
+const IMPORT_DOCUMENT = [
+  "---", 'title: "Imported writing flow"', "date: 2026-09-13",
+  'description: "From a whole document"', "tags: [browser, editor]", "draft: true",
+  "---", "Pasted source.", "",
+].join("\n");
+const TEX_BODY = "\\section{Imported}\n";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---- the backend ----------------------------------------------------------------
@@ -45,6 +52,11 @@ setContext({
     hooks.push(Date.now());
     return { job: `local-${hooks.length}` };
   },
+  // The production URL writes straight to R2. This local capability targets a
+  // test-only PUT endpoint that writes the same exact pending key into the fake
+  // bucket, so Chromium still performs the real sign -> PUT -> complete flow.
+  signPut: async (key) => `${SITE}/local-upload/${Buffer.from(key).toString("base64url")}`,
+  signGet: async (key) => `${SITE}/local-download/${Buffer.from(key).toString("base64url")}`,
 });
 process.env.ADMIN_PASSWORD_HASH = await hashPassword(PASSWORD, { N: 1024, r: 8, p: 1, keyLength: 32 });
 
@@ -88,6 +100,21 @@ const server = http.createServer(async (req, res) => {
   // The one piece of Vercel's response helpers the handlers use.
   res.status = (code) => { res.statusCode = code; return res; };
   try {
+    if (url.pathname.startsWith("/local-upload/") && req.method === "PUT") {
+      const key = Buffer.from(url.pathname.slice("/local-upload/".length), "base64url").toString("utf8");
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      await store.put(key, Buffer.concat(chunks), { contentType: req.headers["content-type"] });
+      res.writeHead(200, { "access-control-allow-origin": SITE });
+      return res.end();
+    }
+    if (url.pathname.startsWith("/local-download/") && req.method === "GET") {
+      const key = Buffer.from(url.pathname.slice("/local-download/".length), "base64url").toString("utf8");
+      const object = await store.get(key);
+      if (!object) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { "content-type": object.contentType, "cache-control": "no-store" });
+      return res.end(object.body);
+    }
     if (url.pathname === "/build-manifest.json") {
       res.writeHead(deployment.status, { "content-type": "application/json" });
       return res.end(JSON.stringify(deployment.manifest));
@@ -297,6 +324,95 @@ try {
   await page.click("#login-submit");
   await check("the password opens the editor", async () =>
     (await page.until(`location.pathname === "/editor/" && document.getElementById("save-state").textContent === "not saved"`)) === true);
+
+  console.log("\nWriting flow:");
+  await page.eval(`(() => {
+    const transfer = new DataTransfer();
+    transfer.setData("text/plain", ${JSON.stringify(IMPORT_DOCUMENT)});
+    document.getElementById("body").dispatchEvent(new ClipboardEvent("paste", {
+      bubbles: true, cancelable: true, clipboardData: transfer,
+    }));
+  })()`);
+  await check("pasting a full document imports safe frontmatter once and leaves hooks out", async () => {
+    const imported = await page.eval(`({
+      title: document.getElementById("title").value,
+      description: document.getElementById("description").value,
+      tags: document.getElementById("tags").value,
+      body: document.getElementById("body").value,
+      status: document.getElementById("attach-status").textContent,
+    })`);
+    return (imported.title === "Imported writing flow" && imported.description === "From a whole document" &&
+      imported.tags === "browser, editor" && imported.body === "Pasted source.\n" &&
+      imported.status === "Imported frontmatter and source.") || imported;
+  });
+  await check("the quiet period creates and autosaves the new draft", async () => {
+    const status = await page.until(`/^autosaved · v1$/.test(document.getElementById("save-state").textContent)`);
+    return status === true;
+  });
+
+  await page.eval(`(() => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(SAMPLE_PNG)}), (char) => char.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], "flow-diagram.png", { type: "image/png" }));
+    const input = document.getElementById("attach-input");
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  await check("attaching signs, uploads, verifies, and inserts the image", async () => {
+    const attached = await page.until(`document.getElementById("attach-status").textContent === "Attached and inserted." && ({
+      body: document.getElementById("body").value,
+      count: document.querySelectorAll("#attachment-list .attachment").length,
+    })`);
+    return (attached.count === 1 && /!\[flow diagram\]\(attachment:\/\/a_[0-9a-f]{16}\)/.test(attached.body)) || attached;
+  });
+  await page.type("#attachment-list .attachment-alt input", "A hand-drawn flow");
+  await page.click("#attachment-list .attachment-actions button");
+  await check("editable alt text is used by Insert", async () => {
+    const body = await page.eval(`document.getElementById("body").value`);
+    return /!\[A hand-drawn flow\]\(attachment:\/\/a_[0-9a-f]{16}\)/.test(body) || body;
+  });
+
+  await page.eval(`(() => {
+    const body = document.getElementById("body");
+    body.value += "\\n![missing](attachment://a_0000000000000000)" +
+      "\\n" + String.fromCharCode(96) + "![example](attachment://a_0000000000000001)" + String.fromCharCode(96);
+    body.dispatchEvent(new Event("input", { bubbles: true }));
+  })()`);
+  await check("an unresolved reference is offered for relinking", async () =>
+    (await page.eval(`!document.getElementById("relink-tools").hidden &&
+      document.getElementById("unresolved-reference").value === "image:a_0000000000000000"`)) === true);
+  await page.click("#relink");
+  await check("relink replaces the missing id with a verified attachment", async () => {
+    const result = await page.eval(`({ body: document.getElementById("body").value,
+      hidden: document.getElementById("relink-tools").hidden })`);
+    return (!result.body.includes("a_0000000000000000") &&
+      result.body.includes("a_0000000000000001") && result.hidden) || result;
+  });
+  await page.click("#preview-toggle");
+  await check("the attached draft previews without a publication error", async () => {
+    const preview = await page.until(`document.getElementById("preview-state").textContent === "up to date" && ({
+      srcdoc: document.getElementById("preview-frame").srcdoc,
+      diagnostics: document.getElementById("diagnostics").textContent,
+    })`);
+    return (preview.srcdoc.includes("Pasted source.") && preview.srcdoc.includes("/local-download/") &&
+      preview.srcdoc.includes('alt="A hand-drawn flow"') &&
+      preview.diagnostics === "") || preview;
+  });
+  await page.click("#save");
+  await page.until(`/^saved · v\\d+$/.test(document.getElementById("save-state").textContent)`);
+  await page.reload();
+  await page.until(`[...document.querySelectorAll("#draft-list button")].some((b) => b.textContent.includes("Imported writing flow"))`);
+  await page.eval(`[...document.querySelectorAll("#draft-list button")]
+    .find((button) => button.textContent.includes("Imported writing flow")).click()`);
+  await check("after reload, the saved writing flow opens with its source and attachment", async () => {
+    const reopened = await page.until(`document.getElementById("title").value === "Imported writing flow" && ({
+      body: document.getElementById("body").value,
+      attachments: document.querySelectorAll("#attachment-list .attachment").length,
+    })`);
+    return (reopened.body.includes("Pasted source.") && reopened.attachments === 1) || reopened;
+  });
+  await page.eval(`document.getElementById("discard").click()`);
+  await page.until(`document.getElementById("title").value === ""`);
 
   console.log("\nA post with no draft:");
   await check("the list shows it as live", () => page.until(listed("Welcome", "/welcome/ · Live")));
@@ -533,6 +649,45 @@ try {
     return (visible.offered && visible.panelHidden && hit === "publication-rebuild" &&
       hooks.length === before + 1 && after.disabled && !after.error &&
       /Rebuilding/.test(after.note)) || { visible, hit, after, fired: hooks.length - before };
+  });
+
+  console.log("\nEditing a publication-only post:");
+  await page.eval(`[...document.querySelectorAll("#publication-list button")]
+    .find((button) => button.textContent.includes("Welcome")).click()`);
+  await check("a post with no draft offers the selected stored revision as an editable draft", async () => {
+    const offered = await page.until(`!document.getElementById("publication").hidden && ({
+      branch: !document.getElementById("publication-branch").hidden,
+      revision: document.getElementById("publication-revision").value,
+    })`);
+    return (offered.branch && /^r_000001_/.test(offered.revision)) || offered;
+  });
+  await page.eval(`document.getElementById("publication-branch").click()`);
+  await check("Edit as draft keeps the post identity and loads the published text", async () => {
+    const draft = await page.until(`document.getElementById("title").value === "Welcome" && ({
+      body: document.getElementById("body").value,
+      status: document.getElementById("save-state").textContent,
+      branchHidden: document.getElementById("publication-branch").hidden,
+    })`);
+    return (draft.body === "Migrated, so it has no draft." && draft.status === "draft created from published revision" &&
+      draft.branchHidden) || draft;
+  });
+
+  await page.eval(`(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([${JSON.stringify("---\ntitle: From TeX\ndate: 2026-09-13\n---\n\\section{Imported}\n")}],
+      "from-file.tex", { type: "text/x-tex" }));
+    const input = document.getElementById("import-source-input");
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  await check("a .tex source file imports metadata and switches the source format", async () => {
+    const imported = await page.until(`document.getElementById("title").value === "From TeX" && ({
+      format: document.getElementById("format").value,
+      body: document.getElementById("body").value,
+      status: document.getElementById("attach-status").textContent,
+    })`);
+    return (imported.format === "latex" && imported.body === TEX_BODY &&
+      imported.status === "Imported frontmatter and source.") || imported;
   });
 
   console.log("\nPhone:");
