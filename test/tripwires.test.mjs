@@ -313,6 +313,25 @@ test("tripwire: a lab's sandbox arrives with its own response, not only from a f
   }
 });
 
+test("tripwire: a figure's one document is sandboxed too", () => {
+  // A figure is page code and needs no sandbox to do its job — but its bundle
+  // may still contain one HTML file, the fallback the contract requires, and
+  // that file is served from the post's own hostname. Opened directly it would
+  // otherwise be an ordinary same-origin document.
+  //
+  // Measured in Chromium (scripts/verify-demo-sandbox.mjs): with this header
+  // the fallback loads with an opaque origin, and — the part worth measuring —
+  // the figure's entry module still runs *in the page that imported it*. A
+  // policy delivered with a subresource does not constrain the document
+  // loading it, so this costs the grant nothing.
+  const config = routing();
+  const csp = headersFor(config, "/assets/figures/a-post/fig/rev1/fallback.html")
+    .get("content-security-policy");
+  assert.ok(csp, "a figure's fallback is served as an ordinary same-origin document");
+  assert.match(csp, /(^|;)\s*sandbox(\s|;|$)/, `the figure path has a policy, but it does not sandbox: ${csp}`);
+  assert.ok(!/allow-same-origin/.test(csp), `a figure's document was handed the site's origin: ${csp}`);
+});
+
 test("tripwire: a lab's read header stops at the lab", () => {
   // The sandbox gives a lab an opaque origin, which makes reading its own
   // modules and JSON a cross-origin read — so §3.6 grants the bundle path an

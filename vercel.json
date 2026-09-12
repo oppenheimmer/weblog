@@ -79,6 +79,10 @@
       "source": "/assets/figures/(.*)",
       "headers": [
         {
+          "key": "Content-Security-Policy",
+          "value": "sandbox allow-scripts"
+        },
+        {
           "key": "X-Content-Type-Options",
           "value": "nosniff"
         },

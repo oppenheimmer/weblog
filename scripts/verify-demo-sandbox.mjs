@@ -40,10 +40,16 @@ import { startPageReader, browserVersion, cannotRun } from "./chromium.mjs";
 import { readRouting, headersFor, fileFor } from "../lib/routing.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const BUNDLE = path.join(ROOT, "test", "fixtures", "interactives", "probe-lab");
+const FIXTURES = path.join(ROOT, "test", "fixtures", "interactives");
 
-// The public shape §3.6 specifies: /demos/<post-slug>/<name>/<revision>/.
+// The public shapes §3.6 specifies. A lab and a figure differ by prefix, which
+// is what lets response headers treat them differently.
 const DEMO_BASE = "/demos/a-post/probe-lab/rev1/";
+const FIGURE_BASE = "/assets/figures/a-post/probe-figure/rev1/";
+const MOUNTS = [
+  { base: DEMO_BASE, dir: path.join(FIXTURES, "probe-lab") },
+  { base: FIGURE_BASE, dir: path.join(FIXTURES, "probe-figure") },
+];
 
 const routing = readRouting(JSON.parse(fs.readFileSync(path.join(ROOT, "vercel.json"), "utf8")));
 
@@ -63,7 +69,7 @@ const TYPES = {
 // ---- the site ----------------------------------------------------------------
 
 const hits = [];
-let mode = { csp: true, acao: true, framed: false, frameSandbox: true };
+let mode = { csp: true, acao: true, framed: false, frameSandbox: true, target: "lab" };
 let appliedToEntry = new Map();
 
 /** The headers vercel.json gives this path, minus whatever the current run withholds. */
@@ -85,10 +91,26 @@ const server = http.createServer((req, res) => {
   // then either frames the lab or sends the browser straight at it.
   if (pathname === "/") {
     const cookies = { "set-cookie": [SESSION_COOKIE, VISIBLE_COOKIE] };
+    const html = (body) => send(200, { ...cookies, "content-type": "text/html; charset=utf-8" }, body);
+
+    // A post page importing its figure: an ordinary same-origin document, with
+    // no sandbox of its own. §3.6 grants the module this page deliberately.
+    if (mode.target === "figure-host") {
+      return html(`<!doctype html><title>clean</title>
+<div id="figure-root"></div>
+<script>new Image().src = "/hit/figure-host-loaded";</script>
+<script type="module">
+  import * as figure from "${FIGURE_BASE}main.mjs";
+  figure.mount(document.getElementById("figure-root"), { theme: "light" });
+</script>`);
+    }
+    // The one document a figure bundle may contain, opened directly.
+    if (mode.target === "figure-doc") {
+      return send(302, { ...cookies, location: `${FIGURE_BASE}fallback.html` });
+    }
     if (!mode.framed) return send(302, { ...cookies, location: DEMO_BASE });
     const sandbox = mode.frameSandbox ? ' sandbox="allow-scripts"' : "";
-    return send(200, { ...cookies, "content-type": "text/html; charset=utf-8" },
-      `<!doctype html><title>clean</title>
+    return html(`<!doctype html><title>clean</title>
 <iframe src="${DEMO_BASE}"${sandbox} referrerpolicy="no-referrer"></iframe>`);
   }
 
@@ -110,13 +132,14 @@ const server = http.createServer((req, res) => {
   // The bundle, served at the public path shape, from the fixture folder. The
   // request is logged before the reply, so a module that was fetched and then
   // rejected by CORS is distinguishable from one never asked for.
-  if (pathname.startsWith(DEMO_BASE)) {
-    hits.push(`bundle ${pathname.slice(DEMO_BASE.length) || "(index)"}`);
+  const mount = MOUNTS.find((m) => pathname.startsWith(m.base));
+  if (mount) {
+    hits.push(`bundle ${pathname.slice(mount.base.length) || "(index)"}`);
     const served = fileFor(routing, pathname);
     if (!served) return send(404, {});
-    const file = path.join(BUNDLE, served.slice(DEMO_BASE.length - 1));
+    const file = path.join(mount.dir, served.slice(mount.base.length - 1));
     if (!fs.existsSync(file)) return send(404, {});
-    if (pathname === DEMO_BASE) appliedToEntry = configured(pathname);
+    if (pathname === mount.base) appliedToEntry = configured(pathname);
     return send(200, { "content-type": TYPES[path.extname(file)] ?? "application/octet-stream" },
       fs.readFileSync(file));
   }
@@ -141,8 +164,8 @@ async function quiet(ms = 750, cap = 8000) {
   }
 }
 
-async function run(label, next) {
-  mode = { csp: true, acao: true, framed: false, frameSandbox: true, ...next };
+async function run(label, next, { alive = "hit inline-ran" } = {}) {
+  mode = { csp: true, acao: true, framed: false, frameSandbox: true, target: "lab", ...next };
   hits.length = 0;
   appliedToEntry = new Map();
   let result;
@@ -151,10 +174,17 @@ async function run(label, next) {
   } catch (err) {
     cannotRun(`the ${label} run could not be loaded over the DevTools protocol`, err.message);
   }
-  // The lab has to have run at all. Without this, every "it could not reach the
-  // session" check below would pass just as well on a page that never loaded —
-  // the failure mode this project has already been bitten by once.
-  if (!hits.includes("hit inline-ran")) {
+  // The page has to have run at all. Without this, every "it could not reach
+  // the session" check below would pass just as well on a page that never
+  // loaded — the failure mode this project has already been bitten by once.
+  //
+  // The sentinel must be something true whether or not the boundary holds.
+  // A sentinel that is itself a boundary claim turns a *measured failure* into
+  // "this environment cannot run the check", which is exit 2 instead of exit 1
+  // and reads as the opposite of the truth. Mutation testing caught exactly
+  // that here: dropping the figure path's sandbox header made the run abort
+  // as un-runnable while its own log showed the fallback reading cookies.
+  if (!hits.includes(alive)) {
     cannotRun(`the ${label} run never executed the lab, so nothing it claims was measured`,
       hits.join("\n"));
   }
@@ -248,6 +278,37 @@ check("the entry module is fetched and then refused, so the lab never starts",
 check("reading its own JSON is refused too", has(noAcao, "hit data/blocked"));
 check("a classic script still runs — why 'it loads' is not evidence the bundle works",
   has(noAcao, "hit classic-ran"));
+
+// ---- 6. the other pathway: a figure, which is page code on purpose ---------
+
+const figureHost = await run("figure host", { target: "figure-host" },
+  { alive: "hit figure-host-loaded" });
+console.log("\nA figure imported by an ordinary post page:");
+check("its entry module runs, over a relative path",
+  has(figureHost, "hit figure-module-ran/figure"));
+check("…and reaches the page that imported it, which is the grant §3.6 makes",
+  figureHost.title === "mounted", `page title was "${figureHost.title}"`);
+check("no read header is needed, because the page and the bundle share an origin",
+  !headersFor(routing, `${FIGURE_BASE}main.mjs`).has("access-control-allow-origin"));
+
+// A figure bundle may still contain one document — its required fallback — and
+// that document is served from the post's own hostname. The contract refuses
+// every *other* HTML file (lib/interactives.mjs), so this is the only one, and
+// the header is what stops it being an ordinary same-origin page.
+const figureDoc = await run("figure document", { target: "figure-doc" },
+  { alive: "hit figure-fallback-ran" });
+console.log("\nA figure's fallback, opened directly:");
+check("it is sandboxed too, despite being page-code's neighbour",
+  has(figureDoc, "hit figure-fallback/null"));
+check("and it cannot read the site's cookies",
+  has(figureDoc, "hit figure-cookie/threw") || has(figureDoc, "hit figure-cookie/(none)"));
+
+const figureDocControl = await run("figure document control", { target: "figure-doc", csp: false },
+  { alive: "hit figure-fallback-ran" });
+console.log("\nControl, the same fallback without the sandbox header:");
+check("it is an ordinary document on the site's origin — so the check above can see it",
+  value(figureDocControl, "hit figure-fallback/") === SITE,
+  value(figureDocControl, "hit figure-fallback/"));
 
 await reader.close();
 server.close();

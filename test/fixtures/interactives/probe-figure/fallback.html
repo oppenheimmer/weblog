@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>figure fallback</title>
+<p>What a listing page, a printer and a reader without JavaScript get instead
+of the figure.</p>
+<script>
+  // A fallback is meant to be static. Nothing enforces that, which is exactly
+  // why the path it is served from must sandbox a direct navigation.
+  // Announced before anything the sandbox affects, so "this document ran" is
+  // never confused with "this document was allowed to do something".
+  new Image().src = "/hit/figure-fallback-ran";
+  new Image().src = "/hit/figure-fallback/" + encodeURIComponent(String(self.origin));
+  try { new Image().src = "/hit/figure-cookie/" + encodeURIComponent(document.cookie || "(none)"); }
+  catch (e) { new Image().src = "/hit/figure-cookie/threw"; }
+</script>
