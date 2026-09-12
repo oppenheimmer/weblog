@@ -98,3 +98,84 @@ export function cannotRun(why, detail = "") {
   if (detail) console.log(`  ${String(detail).trim().slice(0, 500).replace(/\n/g, "\n  ")}`);
   process.exit(2);
 }
+
+/**
+ * Load a page and read its title, over the DevTools protocol.
+ *
+ * `--dump-dom` was the original oracle here and it is not portable: on a
+ * GitHub runner the page loads and fetches everything, yet nothing reaches
+ * stdout. The protocol is what the other two checks already use on the same
+ * image, so this removes the one mechanism that behaved differently.
+ *
+ * Each read gets its own browser context, so no state carries between a run
+ * and its control.
+ */
+export async function startPageReader(profile) {
+  const { chrome, url } = await startDevTools(profile);
+
+  const socket = new WebSocket(url);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener("error", reject, { once: true });
+  });
+
+  let nextId = 1;
+  const pending = new Map();
+  const listeners = new Set();
+  socket.addEventListener("message", ({ data }) => {
+    const message = JSON.parse(data);
+    if (message.id && pending.has(message.id)) {
+      const { resolve, reject } = pending.get(message.id);
+      pending.delete(message.id);
+      message.error ? reject(new Error(`${message.error.message} (${message.error.code})`)) : resolve(message.result);
+      return;
+    }
+    for (const listener of listeners) listener(message);
+  });
+  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    socket.send(JSON.stringify({ id, method, params, sessionId }));
+  });
+  const waitFor = (sessionId, method, timeout = 15_000) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      listeners.delete(listener);
+      reject(new Error(`timed out waiting for ${method}`));
+    }, timeout);
+    const listener = (message) => {
+      if (message.sessionId === sessionId && message.method === method) {
+        clearTimeout(timer);
+        listeners.delete(listener);
+        resolve(message.params);
+      }
+    };
+    listeners.add(listener);
+  });
+
+  return {
+    /** Navigate, wait for `settle` if given, and return the document title. */
+    async read(pageUrl, { settle } = {}) {
+      const { browserContextId } = await send("Target.createBrowserContext");
+      const { targetId } = await send("Target.createTarget", { url: "about:blank", browserContextId });
+      const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+      const call = (method, params) => send(method, params, sessionId);
+      await call("Page.enable");
+      const loaded = waitFor(sessionId, "Page.loadEventFired");
+      await call("Page.navigate", { url: pageUrl });
+      await loaded;
+      if (settle) await settle();
+      const { result } = await call("Runtime.evaluate", { expression: "document.title", returnByValue: true });
+      await send("Target.closeTarget", { targetId });
+      await send("Target.disposeBrowserContext", { browserContextId });
+      return { title: result?.value };
+    },
+    /** Resolves once the browser is really gone, so its profile can be removed. */
+    close() {
+      socket.close();
+      if (chrome.exitCode !== null || chrome.signalCode !== null) return Promise.resolve();
+      const stopped = new Promise((resolve) => chrome.once("exit", resolve));
+      chrome.kill();
+      return stopped;
+    },
+  };
+}

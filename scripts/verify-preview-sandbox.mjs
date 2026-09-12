@@ -14,14 +14,13 @@
 // control run without the sandbox attribute must show that injected script
 // running and reaching the editor; if it does not, the check proves nothing
 // and says so.
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CHROMIUM, BASE_FLAGS, EXTRA_FLAGS, browserVersion, cannotRun } from "./chromium.mjs";
+import { startPageReader, browserVersion, cannotRun } from "./chromium.mjs";
 import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createUploads } from "../lib/server/uploads.mjs";
@@ -116,12 +115,27 @@ await new Promise((resolve) => editor.listen(EDITOR_PORT, "127.0.0.1", resolve))
 await new Promise((resolve) => storage.listen(STORAGE_PORT, "127.0.0.1", resolve));
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "weblog-chrome-"));
-function load() {
+const reader = await startPageReader(profile);
+
+// The requests are the oracle, so a load is finished when they stop arriving
+// rather than after a fixed wait. Both the sandboxed run, where the injected
+// script must never fetch, and the control, where it must, settle the same way.
+async function quiet(ms = 750, cap = 8000) {
+  const deadline = Date.now() + cap;
+  let seen = -1;
+  while (hits.length !== seen && Date.now() < deadline) {
+    seen = hits.length;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}
+
+async function load() {
   hits.length = 0;
-  return new Promise((resolve) => execFile(CHROMIUM, [
-    ...BASE_FLAGS, `--user-data-dir=${profile}`, ...EXTRA_FLAGS,
-    "--virtual-time-budget=6000", "--dump-dom", `http://127.0.0.1:${EDITOR_PORT}/`,
-  ], { timeout: 90_000 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
+  try {
+    return await reader.read(`http://127.0.0.1:${EDITOR_PORT}/`, { settle: quiet });
+  } catch (err) {
+    cannotRun("the page could not be loaded over the DevTools protocol", err.message);
+  }
 }
 
 const results = [];
@@ -131,7 +145,6 @@ const check = (name, ok) => {
 };
 const hit = (entry) => hits.includes(entry);
 const hitPrefix = (prefix) => hits.some((h) => h.startsWith(prefix));
-const titleOf = (dom) => dom.match(/<title>([^<]*)<\/title>/)?.[1];
 
 console.log(`${browserVersion()}`);
 console.log(`Preview frame as shipped: sandbox="${sandbox}"\n`);
@@ -139,22 +152,17 @@ console.log(`Preview frame as shipped: sandbox="${sandbox}"\n`);
 // The oracle for two of these checks is the title in the dumped DOM, so a
 // browser that dumps nothing usable must stop the run rather than let those
 // two read as a breached sandbox. An environment problem is not a finding.
-const dumpOrStop = (run, which) => {
-  if (run.err && !run.stdout) {
-    cannotRun(`the ${which} run did not start`, run.stderr || run.err);
-  }
-  if (!run.stdout?.trim()) {
-    cannotRun(`the ${which} run dumped no DOM (--dump-dom produced nothing)`, run.stderr);
-  }
-  if (titleOf(run.stdout) === undefined) {
-    cannotRun(`the ${which} run's DOM dump has no <title> to read`,
-      run.stdout.slice(0, 300));
+// The title is the oracle for two checks, so a run that produced none is an
+// environment that cannot run them, not a sandbox that let script through.
+const titledOrStop = (run, which) => {
+  if (typeof run?.title !== "string" || run.title === "") {
+    cannotRun(`the ${which} run read no page title`);
   }
   return run;
 };
 
 const sandboxed = await load();
-dumpOrStop(sandboxed, "sandboxed");
+titledOrStop(sandboxed, "sandboxed");
 
 console.log("With the editor's sandbox:");
 check("the preview renders with the site's stylesheets", hit("editor /styles/katex.min.css") && hit("editor /styles/blog.css"));
@@ -164,14 +172,15 @@ check("inline style attributes apply, which KaTeX layout needs", hit("storage /h
 check("injected inline script does not run", !hit("editor /hit/inline-script"));
 check("injected same-origin script does not run", !hit("editor /hit/external-script"));
 check("injected event handler does not run", !hit("editor /hit/onerror"));
-check("the editor page is untouched", titleOf(sandboxed.stdout) === "clean");
+check("the editor page is untouched", sandboxed.title === "clean");
 
 withSandbox = false;
-const control = dumpOrStop(await load(), "control");
+const control = titledOrStop(await load(), "control");
 console.log("\nControl, same page without the sandbox attribute:");
 check("the injected same-origin script runs — so the check above can see it", hit("editor /hit/external-script"));
-check("…and reaches the editor page — which is what the sandbox prevents", titleOf(control.stdout) === "pwned");
+check("…and reaches the editor page — which is what the sandbox prevents", control.title === "pwned");
 
+await reader.close();
 editor.close();
 storage.close();
 fs.rmSync(profile, { recursive: true, force: true });
