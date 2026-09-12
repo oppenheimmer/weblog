@@ -313,6 +313,25 @@ test("tripwire: a lab's sandbox arrives with its own response, not only from a f
   }
 });
 
+test("tripwire: the engine frames a lab with no same-origin access", () => {
+  // The iframe is built by the site's own script rather than frozen into each
+  // published revision, precisely so this can be pinned in one place. Measured
+  // in Chromium (scripts/verify-demo-sandbox.mjs): adding allow-same-origin
+  // hands the lab the session's own origin, and a single token added for
+  // convenience would do it silently.
+  const script = fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8");
+  const sandbox = script.match(/setAttribute\("sandbox",\s*"([^"]*)"\)/);
+  assert.ok(sandbox, "the lab frame is built without a sandbox attribute");
+  assert.equal(sandbox[1].trim(), "allow-scripts", `a lab was granted: ${sandbox[1]}`);
+  assert.match(script, /setAttribute\("referrerpolicy",\s*"no-referrer"\)/,
+    "a lab's requests would carry the page it is embedded in");
+
+  // And it happens only on a post's own page, which is what keeps a listing
+  // free of running code (§3.6).
+  assert.match(script, /classList\.contains\("post-page"\)/,
+    "the engine would upgrade listings, where nothing may run");
+});
+
 test("tripwire: a figure's one document is sandboxed too", () => {
   // A figure is page code and needs no sandbox to do its job — but its bundle
   // may still contain one HTML file, the fallback the contract requires, and

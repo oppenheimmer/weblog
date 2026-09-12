@@ -37,6 +37,19 @@ it, a nested module, a classic script, and its own JSON data.</p>
   // same-site. The server records whether it arrived, not what came back.
   fetch("/api/session-probe/", { credentials: "include" }).catch(() => {});
 
+  // The bridge (§3.6): presentation only, versioned, and checked on both sides.
+  // The lab reports what it was told, so the page's half is measured rather
+  // than assumed, and asks for a height the page must accept.
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (!data || data.weblog !== 1 || data.type !== "context") return;
+    beacon("bridge-context/" + encodeURIComponent(data.theme + "," + data.reducedMotion));
+    parent.postMessage({ weblog: 1, type: "height", height: 321 }, "*");
+    // Presentation only: anything else the page must ignore.
+    parent.postMessage({ weblog: 1, type: "navigate", href: "/api/drafts/" }, "*");
+    parent.postMessage({ weblog: 1, type: "height", height: 99999 }, "*");
+  });
+
   // A lab reading its own data file: CORS-mode, so it needs the read header.
   fetch("./data.json")
     .then((r) => r.json())

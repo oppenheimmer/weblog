@@ -38,14 +38,16 @@ import { fileURLToPath } from "node:url";
 
 import { startPageReader, browserVersion, cannotRun } from "./chromium.mjs";
 import { readRouting, headersFor, fileFor } from "../lib/routing.mjs";
+import { mdBrowser } from "../lib/markdown.mjs";
+import { INTERACTIVE_FENCE } from "../lib/interactives.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const FIXTURES = path.join(ROOT, "test", "fixtures", "interactives");
 
 // The public shapes §3.6 specifies. A lab and a figure differ by prefix, which
 // is what lets response headers treat them differently.
-const DEMO_BASE = "/demos/a-post/probe-lab/rev1/";
-const FIGURE_BASE = "/assets/figures/a-post/probe-figure/rev1/";
+const DEMO_BASE = "/demos/a-post/probe-lab/iv_00000000000000c1/";
+const FIGURE_BASE = "/assets/figures/a-post/probe-figure/iv_00000000000000d1/";
 const MOUNTS = [
   { base: DEMO_BASE, dir: path.join(FIXTURES, "probe-lab") },
   { base: FIGURE_BASE, dir: path.join(FIXTURES, "probe-figure") },
@@ -104,6 +106,46 @@ const server = http.createServer((req, res) => {
   figure.mount(document.getElementById("figure-root"), { theme: "light" });
 </script>`);
     }
+    // A real page: the renderer's own output for a resolved ::demo, driven by
+    // the site's own script. Nothing here is a stand-in except the surrounding
+    // chrome — the figure markup and the upgrade to an iframe are the shipping
+    // code, which is the only way to measure that a listing runs nothing.
+    if (mode.target === "post-page" || mode.target === "listing-page") {
+      const payload = JSON.stringify({
+        kind: "demo", name: "probe-lab",
+        src: `${DEMO_BASE}index.html`,
+        fallback: "<p>A still picture of the lab.</p>",
+      });
+      const article = mdBrowser.render(
+        `Before.\n\n\`\`\`${INTERACTIVE_FENCE}\n${payload}\n\`\`\`\n\nAfter.\n`
+      );
+      const bodyClass = mode.target === "post-page" ? "blog-page post-page" : "blog-page list-page";
+      return html(`<!doctype html><title>clean</title>
+<body class="${bodyClass}">
+${article}
+<script src="/assets/blog.js"></script>
+<script>
+  // Fired whatever the engine did, so "the page ran" stays separable from
+  // "the engine built a frame". A sentinel that is itself a boundary claim
+  // turns a measured failure into "cannot run" — the mistake 6A already made.
+  new Image().src = "/hit/page-ready";
+
+  // The page's own report of what the engine did, so the oracle is the
+  // rendered result rather than this check's opinion of it.
+  setTimeout(function () {
+    var frame = document.querySelector(".interactive iframe");
+    new Image().src = "/hit/page-frame/" + (frame
+      ? encodeURIComponent(frame.getAttribute("sandbox") + "|" + frame.getAttribute("referrerpolicy"))
+      : "none");
+    if (frame) {
+      setTimeout(function () {
+        new Image().src = "/hit/page-height/" + encodeURIComponent(frame.style.height || "unset");
+      }, 900);
+    }
+  }, 600);
+</script>`);
+    }
+
     // The one document a figure bundle may contain, opened directly.
     if (mode.target === "figure-doc") {
       return send(302, { ...cookies, location: `${FIGURE_BASE}fallback.html` });
@@ -122,6 +164,12 @@ const server = http.createServer((req, res) => {
     hits.push(`api cookies=${names}`);
     hits.push(`api read-header=${configured(pathname).has("access-control-allow-origin") ? "yes" : "no"}`);
     return send(200, { "content-type": "application/json" }, "{}");
+  }
+
+  if (pathname === "/assets/blog.js") {
+    hits.push("asset blog.js");
+    return send(200, { "content-type": "text/javascript; charset=utf-8" },
+      fs.readFileSync(path.join(ROOT, "assets", "blog.js")));
   }
 
   if (pathname.startsWith("/hit/")) {
@@ -309,6 +357,36 @@ console.log("\nControl, the same fallback without the sandbox header:");
 check("it is an ordinary document on the site's origin — so the check above can see it",
   value(figureDocControl, "hit figure-fallback/") === SITE,
   value(figureDocControl, "hit figure-fallback/"));
+
+// ---- 7. the real page, and the listing that must not run it ---------------
+
+const postPage = await run("post page", { target: "post-page" }, { alive: "hit page-ready" });
+console.log("\nA published post page, rendered and upgraded by the site's own script:");
+check("the engine builds the frame, sandboxed and without a referrer",
+  value(postPage, "hit page-frame/") === "allow-scripts|no-referrer",
+  value(postPage, "hit page-frame/"));
+check("the lab loads and runs inside it", has(postPage, "hit inline-ran"));
+check("it still cannot reach the page around it", has(postPage, "hit parent/denied"));
+check("the page is untouched", postPage.title === "clean", postPage.title);
+check("the bridge tells the lab the reader's preferences",
+  hasPrefix(postPage, "hit bridge-context/"), value(postPage, "hit bridge-context/"));
+check("…and accepts a height it asks for",
+  value(postPage, "hit page-height/") === "321px", value(postPage, "hit page-height/"));
+// The lab sends 321, then an unknown type, then a height far outside what a
+// page may be — in that order, so the last message wins if anything is
+// accepted blindly. The height staying at 321 is the measurement.
+check("…while ignoring a height outside what a page may be",
+  value(postPage, "hit page-height/") !== "99999px",
+  value(postPage, "hit page-height/"));
+check("…and a message type the bridge does not define",
+  postPage.title === "clean", postPage.title);
+
+const listingPage = await run("listing page", { target: "listing-page" }, { alive: "hit page-ready" });
+console.log("\nThe same article in a listing, where §3.6 says nothing may run:");
+check("no frame is built", has(listingPage, "hit page-frame/none"));
+check("nothing of the lab is even requested",
+  !listingPage.hits.some((hit) => hit.startsWith("bundle")),
+  listingPage.hits.filter((hit) => hit.startsWith("bundle")).join(", "));
 
 await reader.close();
 server.close();
