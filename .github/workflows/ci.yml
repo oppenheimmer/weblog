@@ -104,3 +104,6 @@ jobs:
 
       - name: The publication panel, against a stand-in site
         run: node scripts/verify-editor.mjs
+
+      - name: A sealed lab stays sealed, framed or opened directly
+        run: node scripts/verify-demo-sandbox.mjs

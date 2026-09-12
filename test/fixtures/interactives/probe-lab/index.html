@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>probe lab</title>
+<h1>Interactive lab probe</h1>
+<p>A sealed lab, exactly the shape §3.6 describes: an HTML entry, a module beside
+it, a nested module, a classic script, and its own JSON data.</p>
+
+<script>
+  // Every result leaves by image request, so the *server log* is the oracle.
+  // A fetch would be judged by its own promise, which CORS can reject long
+  // after the request arrived — and an assertion that cannot distinguish
+  // "never sent" from "sent and refused" would measure the wrong thing.
+  window.beacon = (path) => { new Image().src = "/hit/" + path; };
+  beacon("inline-ran");
+
+  // An opaque origin reports itself as the string "null". This is the single
+  // fact every other claim below rests on.
+  try { beacon("origin/" + encodeURIComponent(String(self.origin))); }
+  catch (e) { beacon("origin/threw"); }
+
+  // What script-readable cookies the lab can see. The real session cookie is
+  // HttpOnly and would not appear here even same-origin, so the request to
+  // /api/ below is what measures *that* one.
+  try { beacon("cookie/" + encodeURIComponent(document.cookie || "(none)")); }
+  catch (e) { beacon("cookie/threw"); }
+
+  try { localStorage.setItem("probe", "1"); beacon("storage/readable"); }
+  catch (e) { beacon("storage/denied"); }
+
+  // Only meaningful when framed; at the top level `top` is this document.
+  if (top !== self) {
+    try { top.document.title = "pwned"; beacon("parent/reached"); }
+    catch (e) { beacon("parent/denied"); }
+  }
+
+  // Would carry the session cookie if the browser considered this document
+  // same-site. The server records whether it arrived, not what came back.
+  fetch("/api/session-probe/", { credentials: "include" }).catch(() => {});
+
+  // A lab reading its own data file: CORS-mode, so it needs the read header.
+  fetch("./data.json")
+    .then((r) => r.json())
+    .then((d) => beacon("data/" + d.ok))
+    .catch(() => beacon("data/blocked"));
+</script>
+
+<!-- Classic scripts are never fetched in CORS mode, so this one loads from an
+     opaque origin with no read header at all. Measured deliberately: it is why
+     a bundle can look healthy while every one of its modules is blocked. -->
+<script src="./classic.js"></script>
+<script type="module" src="./demo.mjs"></script>

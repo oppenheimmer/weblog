@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { buildFixtures, cleanup, FIXTURES, ROOT } from "./helpers/build-fixture.mjs";
+import { readRouting, headersFor } from "../lib/routing.mjs";
 import { toPlainText } from "../lib/markdown.mjs";
 
 const defect = (name) => path.join(FIXTURES, "defects", name, "posts");
@@ -285,6 +286,59 @@ test("tripwire: published uploads are never served as immutable", () => {
   const values = matching.flatMap((rule) => rule.headers.map((h) => `${h.key}: ${h.value}`));
   assert.ok(!values.some((v) => /immutable/i.test(v)), `uploads are cached as immutable:\n  ${values.join("\n  ")}`);
   assert.ok(values.some((v) => /must-revalidate/i.test(v)), "uploads are not revalidated");
+});
+
+const routing = () =>
+  readRouting(JSON.parse(fs.readFileSync(path.join(ROOT, "vercel.json"), "utf8")));
+
+test("tripwire: a lab's sandbox arrives with its own response, not only from a frame", () => {
+  // §3.6's central claim. A lab payload has a URL of its own, so opened
+  // directly rather than framed it would otherwise be an ordinary same-origin
+  // document on the editor's hostname, with the session's full rights.
+  // Measured in Chromium (scripts/verify-demo-sandbox.mjs): serve the same
+  // bundle without this header and it reads the site's cookies and sends the
+  // session with its requests. The iframe attribute is the second lock.
+  const config = routing();
+  // Both shapes of the same file: `cleanUrls` means the entry is normally
+  // served without its extension, so a rule written to match *.html would miss
+  // the one file it exists for.
+  for (const entry of ["/demos/a-post/lab/rev1/", "/demos/a-post/lab/rev1/index.html"]) {
+    const csp = headersFor(config, entry).get("content-security-policy");
+    assert.ok(csp, `nothing sandboxes ${entry}`);
+    assert.match(csp, /(^|;)\s*sandbox(\s|;|$)/, `${entry} has a policy, but it does not sandbox: ${csp}`);
+    assert.ok(
+      !/allow-same-origin/.test(csp),
+      `a lab was handed its own origin back, which is the whole boundary: ${csp}`
+    );
+  }
+});
+
+test("tripwire: a lab's read header stops at the lab", () => {
+  // The sandbox gives a lab an opaque origin, which makes reading its own
+  // modules and JSON a cross-origin read — so §3.6 grants the bundle path an
+  // explicit read header. Measured: withhold it and the entry module is
+  // fetched and then refused, and the lab never starts. The grant is exactly
+  // as dangerous as it is useful, and the same header on an API response would
+  // let any page on the internet read the owner's drafts.
+  const config = routing();
+  assert.equal(
+    headersFor(config, "/demos/a-post/lab/rev1/demo.mjs").get("access-control-allow-origin"),
+    "*", "a lab cannot read its own modules"
+  );
+  const elsewhere = [
+    "/api/drafts/", "/api/publish/", "/api/preview/", "/api/auth/session/",
+    "/editor/", "/login/", "/", "/a-post/", "/feed.xml",
+    "/images/uploads/a-post/diagram.png",
+    // Article figures are page code on the post's own origin, so they need no
+    // such grant — and giving them one would publish them to every reader.
+    "/assets/figures/a-post/fig/rev1/main.mjs",
+  ];
+  for (const pathname of elsewhere) {
+    assert.equal(
+      headersFor(config, pathname).get("access-control-allow-origin"), undefined,
+      `${pathname} is readable by any origin on the internet`
+    );
+  }
 });
 
 test("tripwire: the editor's preview frame is sandboxed with no permissions at all", async () => {

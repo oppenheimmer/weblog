@@ -1,0 +1,1 @@
+window.beacon("classic-ran");
