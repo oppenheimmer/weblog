@@ -258,3 +258,30 @@ test("a paginated build splits every listing by weight and keeps both views whol
     cleanup(paged);
   }
 });
+
+test("pages, feeds and the sitemap name the site SITE_URL gives, and nothing else", () => {
+  // One variable decides the public address everywhere: the origin allowlist
+  // and the live-status check already read SITE_URL, and the pages used to
+  // carry a hardcoded one of their own.
+  const other = buildFixtures({ env: { SITE_URL: "https://staging.example.org/" } });
+  try {
+    const page = fs.readFileSync(path.join(other, "welcome", "index.html"), "utf8");
+    assert.match(page, /<link rel="canonical" href="https:\/\/staging\.example\.org\/welcome\/"/);
+    assert.match(page, /property="og:url" content="https:\/\/staging\.example\.org\/welcome\/"/);
+    assert.match(fs.readFileSync(path.join(other, "feed.xml"), "utf8"), /<link>https:\/\/staging\.example\.org\/<\/link>/);
+    assert.match(fs.readFileSync(path.join(other, "sitemap.xml"), "utf8"), /<loc>https:\/\/staging\.example\.org\/welcome\/<\/loc>/);
+    assert.match(fs.readFileSync(path.join(other, "robots.txt"), "utf8"), /Sitemap: https:\/\/staging\.example\.org\/sitemap\.xml/);
+    const leftovers = walk(other).filter((rel) => /\.(html|xml|txt|json)$/.test(rel) &&
+      fs.readFileSync(path.join(other, rel), "utf8").includes("blog.souravmishra.net"));
+    assert.deepEqual(leftovers, [], "a hardcoded site address survived");
+  } finally {
+    cleanup(other);
+  }
+});
+
+test("a SITE_URL that is not a bare origin stops the build, saying why", () => {
+  for (const value of ["blog.example.org", "https://example.org/blog/", "ftp://example.org", "https://user:pw@example.org"]) {
+    assert.throws(() => cleanup(buildFixtures({ env: { SITE_URL: value } })),
+      (err) => /SITE_URL/.test(String(err.stderr ?? err.message)), value);
+  }
+});

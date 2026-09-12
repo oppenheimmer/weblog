@@ -41,6 +41,9 @@ export function buildFixtures({ postsDir = path.join(FIXTURES, "content", "posts
     cwd: ROOT,
     env: {
       ...process.env,
+      // Golden output names the production address. A SITE_URL left in the
+      // shell must not change it; a test that wants another passes one.
+      SITE_URL: "",
       BLOG_POSTS_DIR: postsDir,
       BLOG_ASSETS_DIR: path.join(FIXTURES, "assets"),
       BLOG_DIST_DIR: dist,

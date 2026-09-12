@@ -198,7 +198,7 @@ reaches shell history, the process list, or a log.
 | `ADMIN_PASSWORD_HASH` | Yes | From step 3. Changing it sets a new password **and** ends every session. |
 | `AUTH_VERSION` | No | Bump it to revoke every session without changing the password. |
 | `RATE_LIMIT_HASH_SECRET` | Yes | Hashes client identifiers in rate-limit keys and signs the device cookie. Rotating it forgets every known browser. |
-| `SITE_URL` | No | The origin the editor accepts requests from, and the site whose build manifest decides live status. Defaults to `https://blog.souravmishra.net` in production. |
+| `SITE_URL` | No | The public origin: what canonical URLs, Open Graph tags, the feed and the sitemap name, the origin the editor accepts requests from, and the site whose build manifest decides live status. Must be a bare `https://host` origin, or the build stops. Defaults to `https://blog.souravmishra.net`. Set it for both build and functions. |
 | `EDITOR_ORIGIN` | No | An additional exact origin allowed to call the API. |
 | `VERCEL_DEPLOY_HOOK_URL` | Yes | Fired after publish, unpublish, rollback and Rebuild site. **A secret**: anyone holding it can trigger builds. Absent means the hook is skipped and nothing rebuilds. |
 | `PUBLISH_ENABLED` | No | `"false"` refuses publish, unpublish, rollback and rebuild while still listing publications. |
@@ -230,12 +230,13 @@ with `node --env-file=.env`. Nothing env-shaped is committed.
 4. Wait for DNS to propagate; Vercel provisions HTTPS once it verifies the
    record, and **Settings → Domains** turns **Valid**.
 
-> **If the origin changes, three things move together:** `SITE.url` in
-> [lib/templates.mjs](lib/templates.mjs), which drives canonical URLs, Open
-> Graph tags, the feed and the sitemap; `SITE_URL` in the Vercel project, which
-> sets the origin the editor accepts requests from and the site the editor reads
-> live status back from; and the allowed origin in the R2 bucket's CORS rule.
-> Changing `SITE.url` needs a commit and a push.
+> **If the origin changes, two things move together:** `SITE_URL` in the Vercel
+> project, which sets canonical URLs, Open Graph tags, the feed and the
+> sitemap, the origin the editor accepts requests from and the site the editor
+> reads live status back from; and the allowed origin in the R2 bucket's CORS
+> rule. Rebuild after changing it, so the pages name the new origin. The
+> default, `https://blog.souravmishra.net`, lives in
+> [lib/templates.mjs](lib/templates.mjs).
 
 Note that a Vercel project with SSO protection set to "all except custom
 domains" leaves the custom domain public while `*.vercel.app` stays gated —

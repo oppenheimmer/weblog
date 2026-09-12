@@ -420,12 +420,12 @@ fires the deploy hook and rebuilds with the same engine. Fonts and KaTeX CSS
 are cached as immutable. Published images are revalidated instead, because a
 readable URL is not a content hash.
 
-The site is served at `blog.souravmishra.net`. If the origin changes, update
-three things: `SITE.url` in [lib/templates.mjs](lib/templates.mjs), which drives
-canonical URLs, Open Graph tags, the feed, and the sitemap; `SITE_URL` in the
-project's environment, which sets the origin the editor accepts requests from
-(it otherwise defaults to `https://blog.souravmishra.net` in production); and
-the allowed origin in the R2 bucket's CORS rule.
+The site is served at `blog.souravmishra.net`. If the origin changes, update two
+things and rebuild: `SITE_URL` in the project's environment, which drives
+canonical URLs, Open Graph tags, the feed and the sitemap, and sets the origin
+the editor accepts requests from (it defaults to `https://blog.souravmishra.net`,
+from [lib/templates.mjs](lib/templates.mjs)); and the allowed origin in the R2
+bucket's CORS rule.
 
 Environment variables live in the Vercel project settings and, locally, in a
 gitignored `.env`. Nothing env-shaped is committed. Full setup, DNS, and
