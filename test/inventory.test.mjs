@@ -13,6 +13,8 @@ import { createPublisher, INDEX_KEY, WRITE_LEASE_MS } from "../lib/server/publis
 import { loadPublishedPosts } from "../lib/server/published.mjs";
 import { keys, classifyKey, ownedPrefixes, mediaUrl } from "../lib/server/keys.mjs";
 import { computeRevisionId, validateManifest } from "../lib/interactives.mjs";
+import { createInteractives } from "../lib/server/interactives.mjs";
+import crypto from "node:crypto";
 import {
   buildInventory, collectableForPost, collectGarbage, collectableJobs, deletePostObjects,
   refreshInventory, formatTree, RETENTION, INVENTORY_KEY,
@@ -215,17 +217,147 @@ test("deleting a post takes its interactive bundles with it", async () => {
   }
 });
 
-test("a live post's bundles are never collected, whatever their age", async () => {
+test("a live post's bundle whose manifest cannot be read is never judged, whatever its age", async () => {
   const { store, publisher, client } = harness();
   await publisher.publish(complete());
-  await seedBundle(store, A);
+  await seedBundle(store, A); // "bundle" is not a manifest anyone can read
   backdate(client, "", 400 * DAY);
 
   const swept = await collectGarbage(store, { apply: true });
   assert.deepEqual(swept.unknownKeys, [], "a bundle key was not recognised");
+  // One unreadable fact and no bundle of the post is judged — its published
+  // copy included, though no stored revision names it.
   for (const key of bundleKeys(A)) {
-    assert.ok(await store.get(key), `a published post's bundle was swept: ${key}`);
+    assert.ok(await store.get(key), `a bundle was swept on facts that could not be read: ${key}`);
   }
+});
+
+// A lab uploaded and published through the real paths, so manifests are genuine
+// and published revisions really name the bundle revisions they use.
+async function labPost(h) {
+  const sha = (text) => crypto.createHash("sha256").update(text).digest("hex");
+  const interactives = createInteractives(h.store, { signPut: async (key) => key });
+  const publisher = createPublisher(h.store, {
+    interactives, fireDeployHook: async () => ({}), housekeep: async () => ({ ok: true }),
+  });
+  const { draft } = await h.drafts.create({ title: "Lab post", date: "2026-07-01", body: "seed", slug: "lab-post" });
+  const postId = draft.postId;
+  let interactiveId;
+  const upload = async (demo) => {
+    const files = { "index.html": "<!doctype html><title>lab</title>", "fallback.html": "<p>still</p>", "demo.mjs": demo };
+    const agreed = await interactives.begin({
+      postId, interactiveId,
+      manifest: {
+        kind: "demo", name: "orbit", entry: "index.html", fallback: "fallback.html",
+        files: Object.entries(files).map(([name, body]) => ({ name, bytes: Buffer.byteLength(body), sha256: sha(body) })),
+      },
+    });
+    for (const [name, body] of Object.entries(files)) {
+      await h.store.put(keys.upload(postId, agreed.uploadId, `files/${name}`), Buffer.from(body));
+    }
+    const record = await interactives.complete({ postId, uploadId: agreed.uploadId });
+    interactiveId = record.id;
+    return record;
+  };
+  const publishWith = async (body) => {
+    const current = await h.drafts.get(postId);
+    const saved = await h.drafts.save(postId, { body }, current.etag);
+    await publisher.publish(saved.draft);
+    return saved.draft;
+  };
+  return { postId, upload, publishWith, publisher, interactiveId: () => interactiveId };
+}
+
+const bundleObjects = async (store, postId, revisionId) => [
+  ...await store.listAll(`interactives/${postId}/`),
+  ...await store.listAll(`published/interactives/${postId}/`),
+].map((o) => o.key).filter((key) => key.includes(`/${revisionId}/`));
+
+test("a superseded bundle revision is kept while a stored published revision names it", async () => {
+  const h = harness();
+  const lab = await labPost(h);
+  const v1 = await lab.upload("export const v = 1;\n");
+  await lab.publishWith(`::demo[${v1.id}]`);
+  const v2 = await lab.upload("export const v = 2;\n");
+  await lab.publishWith(`::demo[${v1.id}]\n\nNew words.`);
+  backdate(h.client, "", 60 * DAY); // past the private window, inside the rollback window
+
+  const before = await bundleObjects(h.store, lab.postId, v1.revisionId);
+  assert.ok(before.length >= 4, "the first revision was never stored, so nothing was tested");
+  await collectGarbage(h.store, { apply: true });
+  assert.deepEqual(await bundleObjects(h.store, lab.postId, v1.revisionId), before,
+    "a bundle revision a stored published revision names was collected");
+  assert.ok((await bundleObjects(h.store, lab.postId, v2.revisionId)).length >= 4);
+});
+
+test("once nothing names it, a superseded bundle revision goes, and the live post still builds", async () => {
+  const h = harness();
+  const lab = await labPost(h);
+  const v1 = await lab.upload("export const v = 1;\n");
+  const first = await lab.publishWith(`::demo[${v1.id}]`);
+  const v2 = await lab.upload("export const v = 2;\n");
+  await lab.publishWith(`::demo[${v1.id}]\n\nNew words.`);
+  backdate(h.client, "", 100 * DAY); // the first published revision leaves its rollback window
+
+  await collectGarbage(h.store, { apply: true }); // collects that revision
+  assert.ok(!(await h.store.get(keys.publishedRevision(lab.postId, first.revisionId))), "the old revision stayed");
+  const swept = await collectGarbage(h.store, { apply: true }); // now nothing names v1
+
+  assert.deepEqual(await bundleObjects(h.store, lab.postId, v1.revisionId), []);
+  const v1Keys = swept.keys.filter((key) => key.includes(v1.revisionId));
+  assert.match(v1Keys.find((key) => key.startsWith("interactives/")), /manifest\.json$/,
+    "files were deleted before the manifest that commits them");
+  assert.ok((await bundleObjects(h.store, lab.postId, v2.revisionId)).length >= 7, "the live revision lost files");
+  assert.ok(await h.store.get(keys.interactiveName(lab.postId, "orbit")), "the name claim was collected");
+
+  const posts = await loadPublishedPosts({ store: h.store });
+  assert.equal(posts[0].interactives[0].revisionId, v2.revisionId);
+});
+
+test("a superseded bundle revision inside its window, or the newest one, is kept", async () => {
+  const h = harness();
+  const lab = await labPost(h);
+  const v1 = await lab.upload("export const v = 1;\n");
+  const v2 = await lab.upload("export const v = 2;\n");
+  backdate(h.client, v1.revisionId, 20 * DAY);
+  backdate(h.client, v2.revisionId, 400 * DAY);
+
+  await collectGarbage(h.store, { apply: true });
+  assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, v1.id, v1.revisionId)), "collected inside its window");
+  assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, v2.id, v2.revisionId)), "the newest revision was collected");
+});
+
+test("a stored revision that vanishes between listing and reading keeps every published bundle copy", async () => {
+  const h = harness();
+  const lab = await labPost(h);
+  const v1 = await lab.upload("export const v = 1;\n");
+  const first = await lab.publishWith(`::demo[${v1.id}]`);
+  await h.store.put(keys.publishedInteractive(lab.postId, v1.id, "iv_00000000000000ee", "index.html"), Buffer.from("stray"));
+  backdate(h.client, "", 400 * DAY);
+  // Listed, then gone by the time it is read: what another sweep in flight
+  // looks like from here.
+  const vanished = keys.publishedRevision(lab.postId, first.revisionId);
+  const read = h.store.getJson;
+  h.store.getJson = (key) => (key === vanished ? Promise.resolve(null) : read(key));
+
+  await collectGarbage(h.store, { apply: true });
+  assert.ok(await h.client.objects.get(`${FAKE_CONFIG.prefix}/${keys.publishedInteractive(lab.postId, v1.id, "iv_00000000000000ee", "index.html")}`),
+    "an unnamed copy was collected though a listed revision could not be read");
+});
+
+test("a stored revision that cannot be read keeps every published bundle copy", async () => {
+  const h = harness();
+  const lab = await labPost(h);
+  const v1 = await lab.upload("export const v = 1;\n");
+  const first = await lab.publishWith(`::demo[${v1.id}]`);
+  await h.store.put(keys.publishedInteractive(lab.postId, v1.id, "iv_00000000000000ee", "index.html"), Buffer.from("stray"));
+  await h.store.put(keys.publishedRevision(lab.postId, "r_000001_0000_broken"), Buffer.from("{ not json"));
+  backdate(h.client, "", 400 * DAY);
+
+  await collectGarbage(h.store, { apply: true }).catch(() => {});
+  assert.ok(await h.store.get(keys.publishedInteractive(lab.postId, v1.id, "iv_00000000000000ee", "index.html")),
+    "an unnamed copy was collected though a revision could not be read");
+  assert.ok(first);
 });
 
 test("an orphaned post's bundles are swept with the rest of it", async () => {

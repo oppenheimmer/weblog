@@ -358,14 +358,17 @@ incrementally. Collection is scoped to one post at a time by the post id in
 every key, is dry by default, and never touches the current published revision,
 the current draft, or anything younger than an hour. Retention: superseded
 published revisions 90 days (the rollback window), draft history 30 days or 20
-revisions per post, unattached uploads 24 hours. It also runs automatically
-after publish, unpublish, rollback and draft discard, and never throws.
+revisions per post, unattached uploads 24 hours, publication jobs 30 days once
+the index no longer names their revision. A superseded interactive bundle
+revision goes 30 days after it was stored once nothing needs it — it is not
+what its interactive resolves to, and no stored published revision names it —
+and a published bundle copy goes a day after the last revision naming it; if
+any of those facts cannot be read, no bundle of that post is touched. It runs
+automatically after publish, unpublish, rollback, draft discard and Rebuild
+site, and never throws.
 
-Two things it deliberately does **not** collect: expired sessions and
-rate-limit windows, which the R2 lifecycle rules in §2 delete; and publication
-job records under `<prefix>/publications/`, which currently have **no retention
-rule at all** and accumulate — discarding a post leaves its jobs behind, because
-they sit outside the post's own prefixes. Clear them by hand occasionally.
+Expired sessions and rate-limit windows are not collected here: the R2
+lifecycle rules in §2 delete them.
 
 ### Quotas worth knowing
 
