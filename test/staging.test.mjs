@@ -315,7 +315,7 @@ test("a folder the bundle contract refuses is refused before upload", async (t) 
   const { dir } = stage(t, {
     folders: {
       "double-pendulum": LAB,
-      energy: { ...FIGURE, "interactive.json": '{"entry":"chart.mjs","dependencies":["d3"]}' },
+      energy: { ...FIGURE, "interactive.json": '{"entry":"chart.mjs","dependencies":["lodash"]}' },
     },
   });
   await refusal(() => push(h, dir), "invalid_dependency");

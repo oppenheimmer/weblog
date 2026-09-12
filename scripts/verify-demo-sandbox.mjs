@@ -120,7 +120,8 @@ const server = http.createServer((req, res) => {
         blocks.push(fence({
           kind: "figure", name: "probe-figure",
           src: `${FIGURE_BASE}main.mjs`,
-          dependencies: [],
+          // Declared by name; the engine loads it from assets/vendor/.
+          dependencies: ["d3"],
           fallback: "<p>A still chart.</p>",
         }));
       }
@@ -151,6 +152,15 @@ ${article}
     hits.push(`api cookies=${names}`);
     hits.push(`api read-header=${configured(pathname).has("access-control-allow-origin") ? "yes" : "no"}`);
     return send(200, { "content-type": "application/json" }, "{}");
+  }
+
+  // The engine's vendored libraries, from the repository, as the build copies
+  // them. Logged, so "the page asked for it" is measured, not assumed.
+  if (pathname.startsWith("/assets/vendor/")) {
+    const file = path.join(ROOT, "assets", "vendor", path.basename(pathname));
+    hits.push(`vendor ${path.basename(pathname)}`);
+    if (!fs.existsSync(file)) return send(404, {});
+    return send(200, { "content-type": "text/javascript; charset=utf-8" }, fs.readFileSync(file));
   }
 
   if (pathname === "/assets/blog.js") {
@@ -417,11 +427,15 @@ check("the figure draws into the root it was given, and the fallback steps aside
   value(figurePage, "hit page-figure/"));
 check("a lab on the same page is unaffected",
   has(figurePage, "hit inline-ran") && postPage.title === "clean");
+check("the d3 it declared is loaded from this site first, and the module sees 7.9.0",
+  has(figurePage, "vendor d3.v7.9.0.min.js") && value(figurePage, "hit figure-d3/") === "7.9.0",
+  value(figurePage, "hit figure-d3/"));
 
 const figureListing = await run("figure in a listing", { target: "listing-page", withFigure: true },
   { alive: "hit page-ready" });
 console.log("\nThe same figure in a listing, where §3.6 says nothing may run:");
 check("its module is never imported", !hasPrefix(figureListing, "hit figure-mount/"));
+check("and the library it declared is never fetched", !has(figureListing, "vendor d3.v7.9.0.min.js"));
 check("the fallback is what remains",
   value(figureListing, "hit page-figure/").includes("interactive--figure") &&
   !value(figureListing, "hit page-figure/").includes("interactive--live"),

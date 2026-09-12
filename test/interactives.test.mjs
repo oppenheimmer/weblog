@@ -8,6 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -198,16 +199,16 @@ test("file types a bundle may not contain are refused by name", () => {
 
 test("a dependency is a name the engine vendors, never a URL", () => {
   assert.deepEqual(validateManifest(demo({ dependencies: ["distill"] })).dependencies, ["distill"]);
-  for (const dependency of ["https://cdn.example.com/d3.js", "../d3.mjs", "left-pad", "Distill", "d3"]) {
+  assert.deepEqual(validateManifest(demo({ dependencies: ["distill", "d3"] })).dependencies, ["d3", "distill"]);
+  for (const dependency of ["https://cdn.example.com/d3.js", "../d3.mjs", "left-pad", "Distill", "D3", "d3@7"]) {
     assert.equal(refusal(demo({ dependencies: [dependency] })).code, "invalid_dependency");
   }
 });
 
 test("every vendored name is something this engine actually serves", () => {
-  // A dependency is a promise: the page has to be able to load it. §3.6 named
-  // d3 as an example and the repository does not vendor it, so accepting the
-  // name would publish a figure that resolves, builds, and then fails in the
-  // reader's browser.
+  // A dependency is a promise: the page has to be able to load it. d3 was once
+  // offered before it was vendored, which would have published a figure that
+  // resolved, built and then failed in the reader's browser.
   const vendor = path.join(ROOT, "assets", "vendor");
   for (const name of VENDORED_DEPENDENCIES) {
     const source = VENDORED_SOURCES[name];
@@ -218,6 +219,31 @@ test("every vendored name is something this engine actually serves", () => {
       `${name} is offered to bundles but ${source} is not in the repository`
     );
   }
+});
+
+test("the page loads vendored libraries from exactly the table publication checks", () => {
+  // Two tables name the same libraries: this module refuses what it does not
+  // list, and assets/blog.js loads what it does. A name in one and not the
+  // other either publishes a figure the page cannot load, or loads what
+  // publication would have refused.
+  const script = fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8");
+  const table = /var VENDORED_SOURCES = (\{[^}]*\})/.exec(script);
+  assert.ok(table, "assets/blog.js has no vendored-library table");
+  assert.deepEqual(JSON.parse(table[1].replace(/(\w+):/g, '"$1":')), VENDORED_SOURCES);
+});
+
+test("the vendored d3 is the upstream 7.9.0 build, byte for byte, with its licence", () => {
+  // Fetched with `npm pack d3@7.9.0`, which checks the registry's sha512
+  // integrity, and copied from package/dist/d3.min.js unchanged. A vendored
+  // library that was edited, or silently swapped for another version, is code
+  // on the post's origin that nobody reviewed.
+  const bytes = fs.readFileSync(path.join(ROOT, "assets", "vendor", "d3.v7.9.0.min.js"));
+  assert.equal(crypto.createHash("sha256").update(bytes).digest("hex"),
+    "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539");
+  assert.match(bytes.subarray(0, 80).toString(), /^\/\/ https:\/\/d3js\.org v7\.9\.0 /);
+  const licence = fs.readFileSync(path.join(ROOT, "assets", "vendor", "d3.LICENSE.txt"), "utf8");
+  assert.match(licence, /Copyright 2010-2023 Mike Bostock/);
+  assert.match(licence, /Permission to use, copy, modify, and\/or distribute this software/);
 });
 
 // -------------------------------------------------------------- ownership
@@ -374,7 +400,7 @@ test("a figure payload is refused unless it names a module the engine published"
     { ...good, src: "/assets/figures/a/x/not-a-revision/main.mjs" },
     // A dependency the engine does not serve. Refused here as well as at
     // publish, because this is the last check before it becomes a script tag.
-    { ...good, dependencies: ["d3"] },
+    { ...good, dependencies: ["lodash"] },
     { ...good, dependencies: ["https://cdn.example.com/d3.js"] },
   ]) {
     assert.equal(readInteractivePayload(JSON.stringify(bad)), null,

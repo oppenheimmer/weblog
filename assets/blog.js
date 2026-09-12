@@ -117,9 +117,10 @@
 
     // A vendored library, loaded once and shared by every figure asking for it.
     // Names are resolved by the engine, never by the bundle: a figure declares
-    // "distill", and where that comes from is this file's business.
+    // "distill" or "d3", and where that comes from is this file's business.
+    // Kept equal to VENDORED_SOURCES in lib/interactives.mjs by a test.
     var vendored = {};
-    var VENDORED_SOURCES = { distill: "/assets/vendor/distill.template.v2.js" };
+    var VENDORED_SOURCES = { distill: "/assets/vendor/distill.template.v2.js", d3: "/assets/vendor/d3.v7.9.0.min.js" };
 
     function loadVendored(name) {
         if (!Object.prototype.hasOwnProperty.call(VENDORED_SOURCES, name)) {

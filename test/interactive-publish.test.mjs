@@ -207,9 +207,23 @@ test("a figure declaring a library the engine does not serve is refused", async 
     () => attach(h, post.postId, {
       "main.mjs": "export const mount = () => {};\n",
       "fallback.html": "<p>still</p>",
-    }, { kind: "figure", entry: "main.mjs", dependencies: ["d3"] }),
+    }, { kind: "figure", entry: "main.mjs", dependencies: ["lodash"] }),
     (err) => err.code === "invalid_dependency"
   );
+});
+
+test("a figure declaring d3 and distill publishes, and its page asks the engine for both", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const figure = await attach(h, post.postId, {
+    "main.mjs": "export const mount = (root) => { root.textContent = globalThis.d3.version; };\n",
+    "fallback.html": "<p>A still chart.</p>",
+  }, { kind: "figure", entry: "main.mjs", name: "d3-chart", dependencies: ["d3", "distill"] });
+
+  await h.publisher.publish(await saveBody(h, post, `::figure[${figure.id}]`));
+  const [published] = await loadPublishedPosts({ store: h.store });
+  assert.deepEqual(published.interactives[0].dependencies, ["d3", "distill"]);
+  assert.match(published.html, /data-interactive-deps="d3 distill"/);
 });
 
 test("a reference inside code is left alone", async () => {

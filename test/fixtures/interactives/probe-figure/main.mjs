@@ -15,6 +15,9 @@ export function mount(root, context) {
   new Image().src = "/hit/figure-mount/" + encodeURIComponent(
     [label, context.theme, context.reducedMotion, typeof context.width].join(",")
   );
+  // A vendored library the figure declared, loaded by the engine before this
+  // module was imported: the version the page actually defines, or none.
+  new Image().src = "/hit/figure-d3/" + encodeURIComponent(globalThis.d3 ? globalThis.d3.version : "none");
   return context;
 }
 

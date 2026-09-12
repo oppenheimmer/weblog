@@ -195,8 +195,9 @@ message channel passes presentation values: theme, reduced-motion preference and
 Everything remains on **`blog.souravmishra.net`**. There is no separate demo hostname. The `/demos/` path receives
 special sandbox headers, while its immutable public asset files receive only the narrow read permission needed
 for local module imports and data files. Editor and API responses never receive that permission. Outside scripts,
-CDNs and data services are not part of either path. A bundle may declare a library the engine vendors — today
-only `distill` — and never a URL.
+CDNs and data services are not part of either path. A figure may declare a library the engine vendors, and never
+a URL: `distill` (the Distill template's components) or `d3` (D3 7.9.0, the unmodified upstream build, which
+defines the global `d3` before the figure's module is imported). Both are served from `/assets/vendor/`.
 
 Both paths publish an immutable folder with a required static HTML fallback. For example:
 
@@ -236,7 +237,7 @@ staging/double-pendulum/
 ├── post.md                 frontmatter and body; ::demo[lab] and ::figure[energy]
 ├── lab/                    index.html, fallback.html, …
 └── energy/
-    ├── interactive.json    optional: {"entry": "chart.mjs", "dependencies": ["distill"]}
+    ├── interactive.json    optional: {"entry": "chart.mjs", "dependencies": ["d3"]}
     ├── chart.mjs
     └── fallback.html
 ```
@@ -380,7 +381,7 @@ node --env-file=.env scripts/verify-restore.mjs # back up, lose everything, rest
 | `lib/feed.mjs`        | RSS, sitemap, and `robots.txt`                                   |
 | `lib/server/`         | R2 store, object keys, drafts, uploads, publish, preview, auth   |
 | `api/`                | Vercel functions: login, editor, drafts, uploads, preview, publish |
-| `assets/`             | Site and editor styles and scripts, vendored distill             |
+| `assets/`             | Site and editor styles and scripts, vendored distill and d3      |
 | `test/`               | Golden output, contract invariants, tripwires, unit tests        |
 | `scripts/`            | Browser checks, live R2 checks, password setup, inventory        |
 
