@@ -474,6 +474,18 @@ Idle timeout is 8 hours, refreshed on activity, with a hard 7-day ceiling.
 Expiry is enforced on every read, so a record that outlives its deadline never
 authenticates even if cleanup has not run.
 
+### Request logs
+
+Every API request writes one JSON line to the function's runtime log: its
+`requestId` (the same one an error response carries), method, path, status,
+duration, commit and deployment, and — where they apply — the post, job,
+revision, upload, attachment or bundle id and the action or refusal code. Filter
+the project's **Logs** view in Vercel by `requestId` or a post id. Lines never
+contain a password, cookie, CSRF token, signed URL, draft text or a refusal's
+message. The Hobby plan keeps runtime logs for **one hour**, so look soon after
+something goes wrong; what changed on the site is recorded durably in R2 as
+publication jobs and the build's failure record.
+
 ### A failed build
 
 Vercel keeps the previous deployment serving, and the draft and publication job
