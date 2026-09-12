@@ -33,6 +33,88 @@ const OPERABLE = new Set([
 ]);
 
 const attachmentCount = `document.querySelectorAll("#attachment-list .attachment").length`;
+
+// WCAG contrast, measured from what Chromium computed: every visible run of
+// text, form value and placeholder, its colour composited over the backgrounds
+// behind it. 4.5:1, or 3:1 for large text. Disabled and busy controls are
+// exempt, as WCAG exempts inactive components; the preview frame is the
+// public site's own styling. Anything over an image cannot be measured and is
+// counted rather than guessed.
+const CONTRAST = `(() => {
+  const parse = (value) => {
+    const m = /rgba?\\(([^)]+)\\)/.exec(value);
+    if (!m) return null;
+    const [r, g, b, a = 1] = m[1].split(/[\\s,\\/]+/).filter(Boolean).map(Number);
+    return { r, g, b, a };
+  };
+  const over = (top, under) => ({
+    r: top.r * top.a + under.r * (1 - top.a), g: top.g * top.a + under.g * (1 - top.a),
+    b: top.b * top.a + under.b * (1 - top.a), a: 1,
+  });
+  const luminance = ({ r, g, b }) => [r, g, b].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }).reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+  const ratio = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const background = (el) => {
+    const layers = [];
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.backgroundImage !== "none") return null;
+      const color = parse(style.backgroundColor);
+      if (color && color.a > 0) layers.push(color);
+      if (color && color.a === 1) break;
+    }
+    return layers.reverse().reduce((under, top) => over(top, under), { r: 255, g: 255, b: 255, a: 1 });
+  };
+  const opacity = (el) => {
+    let value = 1;
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) value *= Number(getComputedStyle(node).opacity);
+    return value;
+  };
+  const exempt = (el) => el.closest("iframe, svg, [aria-disabled='true'], :disabled, [hidden]");
+  const measure = (el, colorValue, sample) => {
+    const style = getComputedStyle(el);
+    const bg = background(el);
+    if (!bg) return { skipped: true };
+    const fg = parse(colorValue);
+    const text = over({ ...fg, a: fg.a * opacity(el) }, bg);
+    const size = parseFloat(style.fontSize);
+    const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+    const value = ratio(text, bg);
+    return { sample, ratio: Math.round(value * 100) / 100, need: large ? 3 : 4.5, ok: value >= (large ? 3 : 4.5) };
+  };
+  const results = [];
+  let skipped = 0;
+  const seen = new Set();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const el = node.parentElement;
+    if (!node.textContent.trim() || seen.has(el) || exempt(el)) continue;
+    if (!el.checkVisibility({ visibilityProperty: true }) || el.getBoundingClientRect().width === 0) continue;
+    seen.add(el);
+    const result = measure(el, getComputedStyle(el).color, node.textContent.trim().slice(0, 40));
+    if (result.skipped) skipped++; else results.push(result);
+  }
+  for (const el of document.querySelectorAll("input, textarea, select")) {
+    if (exempt(el) || !el.checkVisibility() || el.type === "file") continue;
+    if (el.value) results.push(measure(el, getComputedStyle(el).color, "value of #" + el.id));
+    if (el.placeholder && !el.value) results.push(measure(el, getComputedStyle(el, "::placeholder").color, "placeholder of #" + el.id));
+  }
+  return { failing: results.filter((r) => r && !r.ok), measured: results.length, skipped };
+})()`;
+
+/** Whether the page scrolls sideways at a given width. */
+const reflowAt = async (page, width) => {
+  await page.resize(width, 800);
+  await sleep(300);
+  const fit = await page.eval(`({ scroll: document.documentElement.scrollWidth, width: innerWidth })`);
+  await page.resize(1440, 900);
+  return fit;
+};
 const active = `(document.activeElement && (document.activeElement.id || document.activeElement.tagName))`;
 
 let page;
@@ -82,6 +164,15 @@ try {
     const focus = await page.eval(active);
     return (node.role === "alert" && focus === "password") || { node, focus };
   });
+  await check("the sign-in page's text meets WCAG AA contrast", async () => {
+    const result = await page.eval(CONTRAST);
+    return (result.failing.length === 0 && result.measured > 0) || result;
+  });
+  await check("the sign-in page reflows at 320 CSS pixels without scrolling sideways", async () => {
+    const fit = await reflowAt(page, 320);
+    return fit.scroll <= fit.width || fit;
+  });
+  await page.eval(`document.getElementById("password").select()`);
   await page.insertText(PASSWORD); // the refused text is selected, so this replaces it
   await page.press("Enter");
   await page.until(`location.pathname === "/editor/" && document.getElementById("save-state").textContent === "not saved"`);
@@ -306,6 +397,16 @@ try {
     await sleep(500);
     const focus = await page.eval(active);
     return (focus === "publication-rebuild" && hooks.length === before + 1) || { focus, hooks: hooks.length - before };
+  });
+
+  console.log("\nSeeing it:");
+  await check("the editor's text meets WCAG AA contrast, with a post, its attachments and its panel on screen", async () => {
+    const result = await page.eval(CONTRAST);
+    return (result.failing.length === 0 && result.measured > 20) || result;
+  });
+  await check("the editor reflows at 320 CSS pixels without scrolling sideways", async () => {
+    const fit = await reflowAt(page, 320);
+    return fit.scroll <= fit.width || fit;
   });
 
   await page.eval(`document.getElementById("slug").focus()`);
