@@ -7,7 +7,7 @@
 // is the entire diagnosis missing.
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 
 export const CHROMIUM = process.env.CHROMIUM || "chromium-browser";
 
@@ -74,4 +74,27 @@ export async function startDevTools(profile, { waitMs = 20_000 } = {}) {
 
   const [port, browserPath] = fs.readFileSync(portFile, "utf8").trim().split("\n");
   return { chrome, port, browserPath, url: `ws://127.0.0.1:${port}${browserPath}` };
+}
+
+/** What the browser calls itself, for the log. Never fatal. */
+export function browserVersion() {
+  try {
+    return execFileSync(CHROMIUM, ["--version"], { encoding: "utf8" }).trim();
+  } catch {
+    return `${CHROMIUM} (version unknown)`;
+  }
+}
+
+/**
+ * Stop, reporting an environment that cannot run the check.
+ *
+ * Exit 2, because "the browser did not produce a result" must never be read as
+ * "the boundary being measured failed". A security check that cannot run has
+ * to say so in its own voice.
+ */
+export function cannotRun(why, detail = "") {
+  console.log(`\nCannot run this check with ${browserVersion()}: ${why}`);
+  if (EXTRA_FLAGS.length) console.log(`  extra flags: ${EXTRA_FLAGS.join(" ")}`);
+  if (detail) console.log(`  ${String(detail).trim().slice(0, 500).replace(/\n/g, "\n  ")}`);
+  process.exit(2);
 }

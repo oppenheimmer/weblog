@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CHROMIUM, BASE_FLAGS, EXTRA_FLAGS } from "./chromium.mjs";
+import { CHROMIUM, BASE_FLAGS, EXTRA_FLAGS, browserVersion, cannotRun } from "./chromium.mjs";
 import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createUploads } from "../lib/server/uploads.mjs";
@@ -133,13 +133,29 @@ const hit = (entry) => hits.includes(entry);
 const hitPrefix = (prefix) => hits.some((h) => h.startsWith(prefix));
 const titleOf = (dom) => dom.match(/<title>([^<]*)<\/title>/)?.[1];
 
+console.log(`${browserVersion()}`);
 console.log(`Preview frame as shipped: sandbox="${sandbox}"\n`);
 
+// The oracle for two of these checks is the title in the dumped DOM, so a
+// browser that dumps nothing usable must stop the run rather than let those
+// two read as a breached sandbox. An environment problem is not a finding.
+const dumpOrStop = (run, which) => {
+  if (run.err && !run.stdout) {
+    cannotRun(`the ${which} run did not start`, run.stderr || run.err);
+  }
+  if (!run.stdout?.trim()) {
+    cannotRun(`the ${which} run dumped no DOM (--dump-dom produced nothing)`, run.stderr);
+  }
+  if (titleOf(run.stdout) === undefined) {
+    cannotRun(`the ${which} run's DOM dump has no <title> to read`,
+      run.stdout.slice(0, 300));
+  }
+  return run;
+};
+
 const sandboxed = await load();
-if (sandboxed.err && !sandboxed.stdout) {
-  console.log(`Could not run ${CHROMIUM}: ${String(sandboxed.stderr || sandboxed.err).slice(0, 300)}`);
-  process.exit(2);
-}
+dumpOrStop(sandboxed, "sandboxed");
+
 console.log("With the editor's sandbox:");
 check("the preview renders with the site's stylesheets", hit("editor /styles/katex.min.css") && hit("editor /styles/blog.css"));
 check("KaTeX fonts load (font-src 'self')", hitPrefix("editor /styles/fonts/"));
@@ -151,7 +167,7 @@ check("injected event handler does not run", !hit("editor /hit/onerror"));
 check("the editor page is untouched", titleOf(sandboxed.stdout) === "clean");
 
 withSandbox = false;
-const control = await load();
+const control = dumpOrStop(await load(), "control");
 console.log("\nControl, same page without the sandbox attribute:");
 check("the injected same-origin script runs — so the check above can see it", hit("editor /hit/external-script"));
 check("…and reaches the editor page — which is what the sandbox prevents", titleOf(control.stdout) === "pwned");

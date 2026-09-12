@@ -21,7 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { startDevTools } from "./chromium.mjs";
+import { startDevTools, browserVersion } from "./chromium.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const SHOTS = process.argv.includes("--shots") ? process.argv[process.argv.indexOf("--shots") + 1] : null;
@@ -89,6 +89,7 @@ const PAGED = `http://127.0.0.1:${pagedServer.address().port}`;
 // ---- a small DevTools protocol client -------------------------------------------
 
 const profile = path.join(work, "profile");
+console.log(browserVersion());
 // Exits 2 with the browser's own words if it cannot start (scripts/chromium.mjs).
 const { chrome, url } = await startDevTools(profile);
 const socket = new WebSocket(url);

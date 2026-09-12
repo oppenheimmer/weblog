@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { startDevTools } from "./chromium.mjs";
+import { startDevTools, browserVersion } from "./chromium.mjs";
 
 import { createStore } from "../lib/server/r2.mjs";
 import { createSessionStore } from "../lib/server/sessions.mjs";
@@ -121,6 +121,7 @@ process.env.SITE_URL = SITE;
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "weblog-editor-"));
 const profile = path.join(work, "profile");
+console.log(browserVersion());
 // Exits 2 with the browser's own words if it cannot start (scripts/chromium.mjs).
 const { chrome, url } = await startDevTools(profile);
 const socket = new WebSocket(url);
