@@ -12,9 +12,12 @@
 // to PNG with `dwebp` and its dimensions read from the PNG header, which is a
 // different program reading a different format.
 //
-// VP8X is still hand-built. Neither `webpmux` nor an ffmpeg WebP encoder was
-// available to produce an extended file, so that one case remains what it was,
-// and this comment is the record of which is which.
+// VP8X, the extended form, is real too: `cwebp` writes it for an image with
+// transparency (VP8X, ALPH, VP8) and `webpmux` for one carrying metadata (VP8X,
+// VP8L, EXIF), checked the same way through `dwebp`. Both are wider than 255
+// pixels, because the canvas fields are 24-bit and a hand-built 40x25 header
+// cannot tell a parser that reads all three bytes from one that reads only the
+// first. The hand-built case stays as a second, smaller witness.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -116,6 +119,20 @@ test("WebP lossless (VP8L) dimensions are read from packed 14-bit fields", () =>
   assert.equal(found?.format, "webp");
   assert.equal(found.width, 8);
   assert.equal(found.height, 3);
+});
+
+test("WebP extended (VP8X) dimensions come out of real encoder output, all three bytes of each", () => {
+  for (const [name, width, height] of [
+    ["sample-300x70-alpha.webp", 300, 70],
+    ["sample-257x31-exif.webp", 257, 31],
+  ]) {
+    const bytes = fs.readFileSync(path.join(MEDIA, name));
+    assert.equal(bytes.toString("ascii", 12, 16), "VP8X", `${name} is not an extended file`);
+    const found = sniffImage(bytes);
+    assert.equal(found?.format, "webp", name);
+    assert.equal(`${found.width}x${found.height}`, `${width}x${height}`, name);
+    assert.equal(identify(bytes, { kind: "image" }).ok, true, `${name} is refused as an attachment`);
+  }
 });
 
 test("WebP extended (VP8X) dimensions are read from the canvas fields", () => {
