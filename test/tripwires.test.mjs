@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { buildFixtures, cleanup, FIXTURES, ROOT } from "./helpers/build-fixture.mjs";
+import { toPlainText } from "../lib/markdown.mjs";
 
 const defect = (name) => path.join(FIXTURES, "defects", name, "posts");
 
@@ -428,5 +429,78 @@ test("tripwire: the reveal fires for elements taller than the screen", () => {
     const threshold = options.match(/threshold\s*:\s*([^,}\s]+)/)?.[1] ?? "0";
     assert.equal(threshold, "0", `the reveal observer uses threshold ${threshold}, which tall content never reaches`);
     assert.ok(!/rootMargin\s*:\s*["'][^"']*-/.test(options), "a negative rootMargin can leave content at the page bottom unrevealed");
+  }
+});
+
+test("tripwire: a heading cannot collide with the page's own chrome ids", () => {
+  // Every page inlines an SVG sprite whose symbols have ids like `icon-github`.
+  // A heading slugs by the same rules, so `## Icon github` produced a second
+  // element with that id: invalid HTML, and the heading's own permalink jumped
+  // to the hidden sprite rather than the heading. Listings were always safe,
+  // because lib/markup.mjs namespaces ids there; the post's own page was not.
+  const dist = buildFixtures({ postsDir: defect("chrome-collision") });
+  try {
+    const page = fs.readFileSync(path.join(dist, "collides", "index.html"), "utf8");
+    const ids = [...page.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    assert.deepEqual(dupes, [], "the post page repeats an id");
+
+    // The property that makes it impossible rather than unlikely: heading ids
+    // come from the same slugify as post slugs, which collapses runs of
+    // separators, so no heading id can contain "--". Every chrome id does.
+    const headings = [...page.matchAll(/<h[234] id="([^"]+)"/g)].map((m) => m[1]);
+    assert.ok(headings.length >= 2, "the fixture should have headings");
+    for (const id of headings) assert.ok(!id.includes("--"), `heading id "${id}" contains --`);
+    for (const [, id] of page.matchAll(/<symbol id="([^"]+)"/g)) {
+      assert.ok(id.includes("--"), `chrome id "${id}" is reachable by a heading slug`);
+    }
+  } finally {
+    cleanup(dist);
+  }
+});
+
+test("tripwire: a heading permalink is reachable, not hidden from the people using it", () => {
+  // aria-hidden on a focusable link is a contradiction: a screen-reader user
+  // tabs onto an element that announces nothing. Either it is decorative and
+  // unfocusable, or it is real and named.
+  const dist = buildFixtures({ postsDir: defect("chrome-collision") });
+  try {
+    const page = fs.readFileSync(path.join(dist, "collides", "index.html"), "utf8");
+    const anchors = [...page.matchAll(/<a class="heading-anchor"[^>]*>/g)].map((m) => m[0]);
+    assert.ok(anchors.length >= 2, "no heading permalinks were rendered");
+    for (const tag of anchors) {
+      const hidden = /aria-hidden="true"/.test(tag);
+      const focusable = !/tabindex="-1"/.test(tag);
+      assert.ok(!(hidden && focusable), `a focusable permalink is hidden from assistive technology: ${tag}`);
+      if (focusable) assert.match(tag, /aria-label="[^"]+"/, `a reachable permalink has no name: ${tag}`);
+    }
+    // Each link is named after its own heading, or a list of links is twenty
+    // identical entries. A heading carrying a quote must not break the attribute.
+    const labels = [...page.matchAll(/<a class="heading-anchor"[^>]*aria-label="([^"]*)"/g)].map((m) => m[1]);
+    assert.equal(new Set(labels).size, labels.length, "permalinks share a name");
+    const hostile = labels.find((l) => l.includes("ampersand"));
+    assert.ok(hostile, "the fixture heading with a quote and an ampersand did not render");
+    assert.ok(hostile.includes("&quot;") && hostile.includes("&amp;"),
+      `a heading's punctuation reached the attribute unescaped: ${hostile}`);
+  } finally {
+    cleanup(dist);
+  }
+});
+
+test("tripwire: a description does not keep the punctuation of maths it drops", () => {
+  // Descriptions are derived from the body when the author gives none, and
+  // inline maths is dropped rather than rendered. Dropping `$x$` from
+  // "identity, $x$, ties" left "identity, , ties" in the meta description,
+  // the social card and the RSS summary.
+  const cases = [
+    ["Euler's identity, $e^{i\\pi}+1=0$, ties five constants.", /identity, ties/],
+    ["The bound $n$ grows.", /^The bound grows\.$/],
+    ["Given $$x$$; therefore done.", /^Given; therefore done\.$/],
+  ];
+  for (const [source, expected] of cases) {
+    const text = toPlainText(source);
+    assert.ok(!/\s[,;:]/.test(text), `punctuation left stranded: "${text}"`);
+    assert.ok(!/([,;:])\s*\1/.test(text), `punctuation doubled: "${text}"`);
+    assert.match(text, expected);
   }
 });

@@ -114,14 +114,17 @@ test("references by id list, label, and SVG url() all follow a renamed id", () =
 });
 
 test("section permalinks from a listing go to the post's own page, under the id it has there", () => {
-  const html = mdBrowser.render("## Why this blog?\n\n[inline](#why-this-blog%3F)");
+  // "Why this blog?" slugs to "why-this-blog". Heading ids come from the site's
+  // own slugify, which drops punctuation rather than percent-encoding it, so
+  // the fragment is readable and cannot contain the "--" that namespaces ids.
+  const html = mdBrowser.render("## Why this blog?\n\n[inline](#why-this-blog)");
   const out = prepareArticle(html, {
     idPrefix: "welcome",
     permalinks: { className: "heading-anchor", base: "/welcome/" },
   });
-  assert.match(out, /<a class="heading-anchor" href="\/welcome\/#why-this-blog%3F"/);
-  assert.match(out, /<a href="#welcome--why-this-blog%3F">inline<\/a>/, "an ordinary link was treated as a permalink");
-  assert.ok(definedIds(html).has("why-this-blog%3F"), "the post page does not define the id the permalink targets");
+  assert.match(out, /<a class="heading-anchor" href="\/welcome\/#why-this-blog"/);
+  assert.match(out, /<a href="#welcome--why-this-blog">inline<\/a>/, "an ordinary link was treated as a permalink");
+  assert.ok(definedIds(html).has("why-this-blog"), "the post page does not define the id the permalink targets");
 });
 
 test("the id prefix must be a slug, which is what makes prefixed ids collision-free", () => {
