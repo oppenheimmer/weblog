@@ -431,8 +431,18 @@ authenticates even if cleanup has not run.
 
 Vercel keeps the previous deployment serving, and the draft and publication job
 both survive. Publish again to re-fire only the hook, or use **Rebuild site**.
-The editor cannot currently name a build as failed — it says nothing has landed
-after 15 minutes and points at the Vercel dashboard, which holds the build log.
+
+**The editor names the failure.** A build that fails writes its reason to
+`<prefix>/builds/last-failure.json`, and the panel shows it with a link to the
+deployment list — so a missing image or an unrenderable post is reported where
+you already are, rather than only in a build log the Hobby plan discards after
+an hour. A build that succeeds deletes the record, so it can never accumulate
+and its presence always means the most recent build failed.
+
+Two failures it cannot name, because they happen before the build's own code
+runs: a dependency install that fails, and a platform timeout. For those the
+panel falls back to saying nothing has landed in 15 minutes and no failure was
+recorded, which points at the deployment list.
 
 ---
 

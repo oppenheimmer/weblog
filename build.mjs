@@ -192,16 +192,54 @@ async function build() {
   console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, DIST)}/ in ${Date.now() - started} ms`);
 }
 
+/**
+ * Leave a note in R2 saying why this build failed (CLAUDE.md Step 7).
+ *
+ * The editor cannot otherwise tell a failed build from a slow one: it watches
+ * the public build manifest, and a build that fails never publishes one. Vercel's
+ * dashboard knows, but the reason lives in build logs that Hobby keeps for an
+ * hour. So the build says so itself, in the one place the editor already reads.
+ *
+ * One key, rewritten on failure and deleted on success, so it never accumulates
+ * and its presence always means "the most recent build failed". Reporting must
+ * never mask the real failure, so every error here is swallowed.
+ */
+async function reportBuild(failure) {
+  if (!hasR2Config()) return;
+  try {
+    const [{ createStore }, { keys }] = await Promise.all([
+      import("./lib/server/r2.mjs"),
+      import("./lib/server/keys.mjs"),
+    ]);
+    const store = createStore();
+    if (!failure) return void await store.delete(keys.lastBuildFailure);
+    await store.put(keys.lastBuildFailure, JSON.stringify({
+      schemaVersion: 1,
+      kind: failure.kind,
+      reason: failure.reason,
+      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      at: new Date().toISOString(),
+    }), { contentType: "application/json" });
+  } catch {
+    // A build that cannot report is still a build. Never turn a successful one
+    // into a failure, or an informative failure into a confusing one.
+  }
+}
+
 try {
   await build();
+  await reportBuild(null);
 } catch (err) {
-  if (err instanceof ContentError) {
-    console.error(`\nContent error: ${err.message}\n`);
+  // The two failures this system produces itself, and the only two whose cause
+  // is worth a reader's time. Anything else is a bug and keeps its stack.
+  const kind = err instanceof ContentError ? "content"
+    : err?.name === "MediaSyncError" ? "media"
+      : null;
+  if (kind) {
+    console.error(`\n${kind === "content" ? "Content" : "Media"} error: ${err.message}\n`);
+    await reportBuild({ kind, reason: err.message });
     process.exit(1);
   }
-  if (err?.name === "MediaSyncError") {
-    console.error(`\nMedia error: ${err.message}\n`);
-    process.exit(1);
-  }
+  await reportBuild({ kind: "build", reason: String(err?.message ?? err).slice(0, 500) });
   throw err;
 }

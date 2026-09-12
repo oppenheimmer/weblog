@@ -22,11 +22,17 @@ export default route(async ({ req, res, requestId, store, fireDeployHook, readMa
 
   try {
     if (req.method === "GET") {
-      const [publications, manifest] = await Promise.all([publisher.listPublications(), readManifest()]);
+      const [publications, manifest, buildFailure] = await Promise.all([
+        publisher.listPublications(), readManifest(), publisher.lastBuildFailure(),
+      ]);
       return sendJson(res, 200, {
         site: manifest.ok
           ? { ok: true, commit: manifest.commit }
           : { ok: false, checkable: manifest.checkable, reason: manifest.reason },
+        // Why the last build failed, when one did. The editor shows it only
+        // while it is still waiting for something, so a stale record cannot
+        // contradict a site that has since caught up.
+        buildFailure,
         publications: publications.map((publication) => ({ ...publication, site: siteStatus(publication, manifest) })),
       });
     }

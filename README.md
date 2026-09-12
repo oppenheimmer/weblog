@@ -58,8 +58,13 @@ having succeeded:
 | Unpublished  | Off the site; its revisions are kept for 90 days         |
 | Not checked  | The site could not be read, and the panel says why       |
 
-After each change the editor keeps checking, and says so if nothing has landed
-after 15 minutes, which usually means the build failed. From the same panel:
+After each change the editor keeps checking. **A build that fails says why**:
+the build records the reason in R2 — a post whose image is missing, content it
+refuses to render — and the panel shows it with a link to the deployment log,
+rather than leaving you watching a status that will never change. A build that
+succeeds clears the record. If nothing lands within 15 minutes and no failure
+was recorded, the build probably died before it started, and the panel says
+that instead. From the same panel:
 
 - **Unpublish** takes a post off the site. Its revisions stay, so it can come back.
 - **Roll back** puts a stored revision back on the site; for an unpublished post
@@ -536,6 +541,11 @@ to opt in.
   with `no-store` and a random query parameter, and matched on post id, revision
   and slug. No Vercel token is needed. A site that cannot be read is reported as
   not checked, never as a site with nothing on it.
+- A failed build publishes no manifest, so waiting cannot distinguish one from a
+  slow build. The build writes its own reason to a single key, which the next
+  successful build deletes — so the record can never accumulate, and its presence
+  always means the most recent build failed. Vercel's dashboard knows too, but
+  the reason lives in build logs the Hobby plan keeps for an hour.
 - Calling the deploy hook again while a build of the same commit is running
   cancels the earlier build, which is what collapses a burst of publishes into
   one deployment.

@@ -553,10 +553,25 @@ const WATCH_GIVE_UP_MS = 15 * 60 * 1000;
 // Vercel allows 60 deploy-hook calls an hour; a pause stops repeated clicks spending them.
 const REBUILD_PAUSE_MS = 30_000;
 
+// Vercel's dashboard is where a build's own log lives, so point straight at it
+// rather than saying "check Vercel" (CLAUDE.md Step 7).
+function deploymentsLink() {
+    const a = document.createElement("a");
+    a.href = "https://vercel.com/blueshift/weblog/deployments";
+    a.textContent = "The deployment list";
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    return a;
+}
+
 async function refreshPublications() {
     const { data } = await api("/api/publish/");
     state.publications = data.publications ?? [];
     state.site = data.site ?? null;
+    // Why the last build failed, if it did. The build itself writes this; the
+    // panel shows it only while something has not landed, so a record left by
+    // an older failure cannot contradict a site that has since caught up.
+    state.buildFailure = data.buildFailure ?? null;
     renderPublications();
 }
 
@@ -632,9 +647,18 @@ function renderPanel() {
         unknown: [words(`${name} is ${publication.published ? "published at" : "unpublished from"} `), link,
             words(`. Whether the site shows that could not be checked: ${state.site?.reason ?? "no answer"}.`)],
     }[siteState];
-    if (state.watch.gaveUp && UNSETTLED.has(siteState)) {
-        summary.push(words(" Nothing has changed for 15 minutes, so the build may have failed. " +
-            "Check the deployment in Vercel, then Rebuild site."));
+    // A failed build never publishes a manifest, so waiting alone cannot tell a
+    // broken build from a slow one. The build says which, and names the cause.
+    const failure = UNSETTLED.has(siteState) ? state.buildFailure : null;
+    if (failure) {
+        summary.push(words(` The last build failed: ${failure.reason} `));
+        summary.push(deploymentsLink());
+        summary.push(words(" has the log. Fix the post, then publish again."));
+    } else if (state.watch.gaveUp && UNSETTLED.has(siteState)) {
+        summary.push(words(" Nothing has changed for 15 minutes and the build did not report a failure, "
+            + "so it may have failed before it started. Check "));
+        summary.push(deploymentsLink());
+        summary.push(words(", then Rebuild site."));
     }
     els.publicationSummary.replaceChildren(...summary);
 

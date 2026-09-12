@@ -430,6 +430,29 @@ try {
     return (!data.posts.welcome && Boolean(data.posts["lifecycle-probe"])) || Object.keys(data.posts);
   });
 
+  console.log("\nWhen the build fails:");
+  // The panel is waiting on a rebuild right now, which is exactly when a failed
+  // build is indistinguishable from a slow one unless the build says so.
+  const { keys: storeKeys } = await import("../lib/server/keys.mjs");
+  await check("a failed build names its reason, rather than leaving the panel waiting", async () => {
+    await store.put(storeKeys.lastBuildFailure, JSON.stringify({
+      schemaVersion: 1, kind: "media", at: new Date().toISOString(), commit: "local",
+      reason: "Published media for /welcome/ is missing: diagram.png",
+    }));
+    const waiting = await page.until(`/The last build failed/.test(
+      document.getElementById("publication-summary").textContent) && ${PANEL}`, SETTLE_MS);
+    const link = await page.eval(
+      `(document.querySelector("#publication-summary a[href*='vercel.com']") || {}).textContent || null`);
+    return (/missing: diagram\.png/.test(waiting.summary) && link === "The deployment list") ||
+      { summary: waiting.summary, link };
+  });
+  await check("a build that succeeds clears it, and the panel stops saying so", async () => {
+    await store.delete(storeKeys.lastBuildFailure);
+    const quiet = await page.until(`!/The last build failed/.test(
+      document.getElementById("publication-summary").textContent) && ${PANEL}`, SETTLE_MS);
+    return !/The last build failed/.test(quiet.summary) || { summary: quiet.summary };
+  });
+
   console.log("\nAfter a reload:");
   await page.reload();
   await check("what is still on its way is watched again, with no click", async () => {

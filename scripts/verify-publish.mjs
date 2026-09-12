@@ -180,6 +180,69 @@ await check("a sweep keeps everything the live site needs", async () => {
   assert(posts.length === 1, `the sweep changed what is published (${posts.length} posts)`);
 });
 
+await check("a failed build records why, and a build that succeeds clears it", async () => {
+  // The editor watches the public build manifest, which a failed build never
+  // publishes. Without this record, waiting cannot tell a broken build from a
+  // slow one (Step 7).
+  const { keys } = await import("../lib/server/keys.mjs");
+  const { execFileSync, spawnSync } = await import("node:child_process");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), "verify-build-"));
+  const runBuild = () => spawnSync(process.execPath, ["build.mjs"], {
+    cwd: ROOT, encoding: "utf8",
+    env: { ...process.env, R2_PREFIX: config.prefix, BLOG_DIST_DIR: dist, BLOG_POSTS_DIR: "" },
+  });
+  const cacheDir = path.join(ROOT, "node_modules", ".cache", "weblog-media");
+
+  // A post with an image of its own, so this check does not depend on what the
+  // checks above happened to leave behind.
+  const { createUploads } = await import("../lib/server/uploads.mjs");
+  const uploads = createUploads(store, { signPut: async (key) => `https://unused/${key}` });
+  const png = fs.readFileSync(path.join(ROOT, "test", "fixtures", "media", "sample-7x11.png"));
+  const withImage = await drafts.create({
+    title: "Has an image", date: "2026-07-09", body: "x", slug: `imaged-${Date.now().toString(36)}`,
+  });
+  const pending = await uploads.sign({
+    postId: withImage.draft.postId, name: "diagram.png", size: png.length, type: "image/png",
+  });
+  await store.put(keys.upload(withImage.draft.postId, pending.uploadId, "file"), png);
+  const attachment = await uploads.complete({ postId: withImage.draft.postId, uploadId: pending.uploadId });
+  const ready = await drafts.save(withImage.draft.postId,
+    { ...withImage.draft, body: `Body.\n\n![a diagram](attachment://${attachment.id})` }, withImage.etag);
+  await publisher.publish(ready.draft);
+
+  // Break the build the way a real one breaks: a published revision naming
+  // media that is no longer there.
+  const media = await store.listAll("published/media/");
+  assert(media.length > 0, "no media was published to break");
+  const victim = media[0];
+  const bytes = (await store.get(victim.key)).body;
+  await store.delete(victim.key);
+  fs.rmSync(cacheDir, { recursive: true, force: true });
+
+  const failed = runBuild();
+  assert(failed.status !== 0, "the build succeeded with its media missing");
+  const reported = await publisher.lastBuildFailure();
+  assert(reported, "a failed build left no record of why");
+  assert(reported.kind === "media", `expected a media failure, got ${reported.kind}`);
+  assert(/missing/i.test(reported.reason), `the reason does not say what happened: ${reported.reason}`);
+
+  // Put it back: the next successful build must clear the record, so its
+  // presence always means the most recent build failed.
+  await store.put(victim.key, bytes);
+  fs.rmSync(cacheDir, { recursive: true, force: true });
+  const ok = runBuild();
+  assert(ok.status === 0, `the build still failed: ${ok.stderr?.trim().slice(0, 200)}`);
+  assert(await publisher.lastBuildFailure() === null, "a successful build left the old failure behind");
+
+  fs.rmSync(dist, { recursive: true, force: true });
+});
+
 // ---- cleanup ---------------------------------------------------------------
 console.log("\nCleaning up...");
 const leftover = await store.listAll("");
