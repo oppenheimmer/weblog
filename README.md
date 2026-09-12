@@ -277,6 +277,10 @@ node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # the On the site panel, against a stand-in site
 ```
 
+`.github/workflows/ci.yml` runs the suite and a credential-free build on every
+push and pull request, and the three browser checks on `main`; `audit.yml`
+checks production advisories weekly. Neither is given a secret.
+
 Scripts that touch the live R2 bucket need credentials and are run by hand.
 Each works under a throwaway prefix and cleans up after itself:
 

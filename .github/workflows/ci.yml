@@ -1,0 +1,96 @@
+# CI gate (CLAUDE.md §5A).
+#
+# Tiers 0-5 and 7 run on every push and pull request: they are fast and need no
+# credentials, because the suite runs against an in-memory R2 double. Tier 6
+# drives a real browser and runs on main and on demand.
+#
+# Nothing here is given a secret. The live-bucket scripts are deliberately not
+# run from CI: they would need an R2 credential in GitHub, widening the blast
+# radius this project spends effort narrowing (Appendix C, F-04).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests, golden output, tripwires
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # ci, not install: it installs the lockfile exactly and fails if
+      # package.json and the lockfile disagree.
+      - run: npm ci
+
+      # Tiers 0-5 and 7: golden output, public contract, renderer units,
+      # publication against the double, security regression, concurrency,
+      # build determinism.
+      - run: npm test
+
+      # The real entry point, with no credentials in the environment. This is
+      # the promise in CLAUDE.md §1.1: a clone of the engine builds an empty
+      # site rather than failing, and holds no content of its own.
+      - name: A credential-free build produces an empty site
+        run: |
+          npm run build
+          test -f dist/index.html || { echo "no listing page was written"; exit 1; }
+          posts=$(node -p "require('./dist/build-manifest.json').posts.length")
+          echo "build-manifest.json names $posts post(s)"
+          [ "$posts" = "0" ] || { echo "a clean clone built $posts post(s); it must hold none"; exit 1; }
+
+  browser:
+    name: Browser checks (Chromium)
+    # Tier 6 is slower and needs a browser, so it guards main rather than every
+    # pull request. Run it by hand from the Actions tab before anything risky.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # The scripts default to `chromium-browser`. Fail loudly if the runner
+      # has no browser at all: a check that quietly does not run is worse than
+      # no check, and the scripts themselves exit 2 rather than 0 in that case.
+      - name: Find a browser
+        run: |
+          for b in chromium-browser chromium google-chrome google-chrome-stable; do
+            path=$(command -v "$b" || true)
+            if [ -n "$path" ]; then
+              echo "CHROMIUM=$path" >> "$GITHUB_ENV"
+              echo "using $path"
+              exit 0
+            fi
+          done
+          echo "no Chromium-like browser on this runner" >&2
+          exit 1
+
+      - name: Feed and table (keyboard, phones, no JS)
+        run: node scripts/verify-listing.mjs
+
+      - name: The preview frame cannot run script
+        run: node scripts/verify-preview-sandbox.mjs
+
+      - name: The publication panel, against a stand-in site
+        run: node scripts/verify-editor.mjs

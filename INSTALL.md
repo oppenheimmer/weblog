@@ -378,9 +378,14 @@ node scripts/verify-editor.mjs           # the On the site panel, against a stan
 ```
 
 Those drive Chromium over the DevTools protocol; set `CHROMIUM` if the binary is
-not `chromium-browser`. The scripts below touch the **live** bucket, need
-credentials, and are run by hand. Each works under a throwaway prefix and cleans
-up after itself:
+not `chromium-browser`.
+
+CI runs the first group automatically: `.github/workflows/ci.yml` on every push
+and pull request, with the browser checks on `main`, and `audit.yml` weekly for
+production advisories. Neither workflow is given a secret.
+
+The scripts below are **not** in CI, deliberately — scheduling them would mean
+storing an R2 credential in GitHub:
 
 ```bash
 node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
@@ -388,6 +393,9 @@ node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
 node --env-file=.env scripts/verify-publish.mjs  # publish, unpublish, roll back, build
 node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
 ```
+
+Each works under a throwaway prefix on the real bucket and cleans up after
+itself.
 
 ---
 

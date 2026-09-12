@@ -1,0 +1,36 @@
+# Dependency advisories, weekly (CLAUDE.md Appendix C, F-03).
+#
+# Separate from CI and on a schedule, deliberately. A new advisory published
+# against an unchanged tree is real news, but it should not turn an unrelated
+# commit red. F-03 was two quadratic parsers sitting in the lockfile for weeks;
+# this is what would have said so.
+name: Audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Production dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # --omit=dev: what ships in a function or a build, not the test harness.
+      - run: npm audit --omit=dev
+
+      # The growth-rate tests that pin the F-03 version floors. They fail on a
+      # lockfile that regressed past them, which an advisory feed would not say.
+      - run: node --test test/complexity.test.mjs
