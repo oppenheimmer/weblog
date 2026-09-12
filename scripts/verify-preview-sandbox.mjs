@@ -21,6 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CHROMIUM, BASE_FLAGS, EXTRA_FLAGS } from "./chromium.mjs";
 import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createUploads } from "../lib/server/uploads.mjs";
@@ -30,7 +31,6 @@ import { keys } from "../lib/server/keys.mjs";
 import { createFakeS3, FAKE_CONFIG } from "../test/helpers/fake-r2.mjs";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const CHROMIUM = process.env.CHROMIUM || "chromium-browser";
 const EDITOR_PORT = 8821;
 const STORAGE_PORT = 8822;
 const STORAGE = `http://127.0.0.1:${STORAGE_PORT}`;
@@ -119,9 +119,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), "weblog-chrome-"));
 function load() {
   hits.length = 0;
   return new Promise((resolve) => execFile(CHROMIUM, [
-    "--headless", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`,
-    // Nothing leaves the machine: Google Fonts and the like resolve to nowhere.
-    "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+    ...BASE_FLAGS, `--user-data-dir=${profile}`, ...EXTRA_FLAGS,
     "--virtual-time-budget=6000", "--dump-dom", `http://127.0.0.1:${EDITOR_PORT}/`,
   ], { timeout: 90_000 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
 }

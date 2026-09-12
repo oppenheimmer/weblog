@@ -27,9 +27,9 @@ jobs:
     name: Tests, golden output, tripwires
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -61,18 +61,25 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
 
-      # The scripts default to `chromium-browser`. Fail loudly if the runner
-      # has no browser at all: a check that quietly does not run is worse than
-      # no check, and the scripts themselves exit 2 rather than 0 in that case.
+      # The scripts default to `chromium-browser`. Fail loudly if the runner has
+      # no browser at all: a check that quietly does not run is worse than no
+      # check, and the scripts exit 2 rather than 0 in that case.
+      #
+      # --no-sandbox is for the runner, not for the checks: Chrome's own
+      # sandbox needs user namespaces this image restricts, and without it the
+      # browser exits before opening a debugging port. It drops Chrome's
+      # process isolation, not the boundaries these checks measure — the
+      # iframe sandbox attribute, the same-origin policy and CSP are the
+      # renderer's, and each check still carries a control run that must fail.
       - name: Find a browser
         run: |
           for b in chromium-browser chromium google-chrome google-chrome-stable; do
@@ -85,6 +92,9 @@ jobs:
           done
           echo "no Chromium-like browser on this runner" >&2
           exit 1
+
+      - name: Flags this runner needs
+        run: echo "CHROMIUM_FLAGS=--no-sandbox --disable-dev-shm-usage" >> "$GITHUB_ENV"
 
       - name: Feed and table (keyboard, phones, no JS)
         run: node scripts/verify-listing.mjs

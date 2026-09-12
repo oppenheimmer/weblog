@@ -14,15 +14,16 @@
 // what those cannot: that the rules actually produce the behaviour, including
 // the paths that are easiest to break and hardest to notice — no script,
 // reduced motion, refused storage, a phone, the keyboard.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { startDevTools } from "./chromium.mjs";
+
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const CHROMIUM = process.env.CHROMIUM || "chromium-browser";
 const SHOTS = process.argv.includes("--shots") ? process.argv[process.argv.indexOf("--shots") + 1] : null;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -88,22 +89,9 @@ const PAGED = `http://127.0.0.1:${pagedServer.address().port}`;
 // ---- a small DevTools protocol client -------------------------------------------
 
 const profile = path.join(work, "profile");
-const chrome = spawn(CHROMIUM, [
-  "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-  `--user-data-dir=${profile}`, "--remote-debugging-port=0",
-  // Nothing leaves the machine: Google Fonts and the like resolve to nowhere.
-  "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
-  "about:blank",
-], { stdio: "ignore" });
-chrome.on("error", (err) => {
-  console.log(`Could not run ${CHROMIUM}: ${err.message}`);
-  process.exit(2);
-});
-
-const portFile = path.join(profile, "DevToolsActivePort");
-for (let i = 0; i < 400 && !fs.existsSync(portFile); i++) await sleep(50);
-const [port, browserPath] = fs.readFileSync(portFile, "utf8").trim().split("\n");
-const socket = new WebSocket(`ws://127.0.0.1:${port}${browserPath}`);
+// Exits 2 with the browser's own words if it cannot start (scripts/chromium.mjs).
+const { chrome, url } = await startDevTools(profile);
+const socket = new WebSocket(url);
 await new Promise((resolve, reject) => {
   socket.addEventListener("open", resolve, { once: true });
   socket.addEventListener("error", reject, { once: true });
