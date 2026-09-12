@@ -289,6 +289,7 @@ node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
 node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
 node --env-file=.env scripts/verify-publish.mjs  # publish, unpublish, roll back, build
 node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
+node --env-file=.env scripts/verify-restore.mjs # back up, lose everything, restore, rebuild
 ```
 
 ---

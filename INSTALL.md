@@ -353,14 +353,53 @@ billing. If it ever needs fixing rather than paying for, a Vercel Firewall rate
 rule on `/api/auth/login/` is the cheapest answer, because it refuses the
 request before a function starts.
 
-### Backups
+### Backups, and restoring from one
 
 Git holds no content, so R2 is the only copy. Take dated backups with a
-**separate read-only** R2 token that never goes into Vercel:
+**separate read-only** R2 token that never goes into Vercel.
+
+Configure the remote once (`rclone config`, or write it directly):
+
+```ini
+# ~/.config/rclone/rclone.conf
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = <read-only token id>
+secret_access_key = <read-only token secret>
+endpoint = https://<account id>.r2.cloudflarestorage.com
+region = auto
+no_check_bucket = true
+```
+
+Then:
 
 ```bash
-rclone copy r2:weblog-data/prod ./backup/prod-$(date +%F)
+rclone copy r2:weblog-data/prod ./backup/prod-$(date +%F) --transfers 8
 ```
+
+**A backup nobody has restored is not a backup.** The whole procedure —
+back up, lose everything, restore, rebuild — is rehearsed by a script that
+works under throwaway prefixes on the real bucket and never touches `prod/`:
+
+```bash
+node --env-file=.env scripts/verify-restore.mjs            # 10 checks
+node --env-file=.env scripts/verify-restore.mjs --control  # damage the backup on purpose
+```
+
+It seeds two published posts (one with an image), a draft and a superseded
+revision, builds the site, copies the prefix out with the same `rclone copy`
+above, deletes every object, confirms the site is genuinely gone, restores into
+a **different** prefix, and rebuilds. The proof is that the rebuilt site is
+byte-identical to the site before the loss. The `--control` run deletes one file
+from the backup first and passes only if the checks notice.
+
+To restore for real: stop publishing, `rclone copy ./backup/prod-<date>
+r2:weblog-data/prod`, then **Rebuild site** in the editor. Restoring into a new
+prefix or bucket works equally well — nothing in the data depends on where it
+used to live; change `R2_PREFIX` and redeploy. An incomplete restore does not
+ship a broken site: the build refuses to continue when a published revision
+names media it cannot find.
 
 ### Rotating credentials
 
@@ -422,6 +461,7 @@ node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
 node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
 node --env-file=.env scripts/verify-publish.mjs  # publish, unpublish, roll back, build
 node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
+node --env-file=.env scripts/verify-restore.mjs # back up, lose everything, restore, rebuild
 ```
 
 Each works under a throwaway prefix on the real bucket and cleans up after
