@@ -9,6 +9,10 @@ dist/
 .env
 .env.*
 
+# Posts and interactive folders waiting for scripts/push.mjs. Content, never
+# engine: the push empties this folder, and ignoring it covers the wait.
+staging/
+
 # Private planning / agent context. Holds the full authoring-system design:
 # endpoint contract, session and cookie configuration, rate-limit thresholds,
 # lockout recovery, and review notes on known weaknesses. This repository is

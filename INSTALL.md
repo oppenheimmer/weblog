@@ -306,6 +306,38 @@ Vercel's hourly hook limit.
 Pushing to `main` rebuilds the engine with the same content; publishing rebuilds
 the same engine with new content. Both go through the same build.
 
+### Pushing a staged post from a terminal
+
+A post with interactive figures or labs is pushed from a folder, because the
+editor cannot attach a bundle yet. Stage one post per folder under `staging/`
+(gitignored): its `.md` source and one subfolder per `::demo[<folder>]` or
+`::figure[<folder>]` it names. README's *Pushing a post with its interactives*
+describes the layout.
+
+```bash
+node --env-file=.env scripts/push.mjs staging/<post>            # dry run
+node --env-file=.env scripts/push.mjs staging/<post> --apply    # push and clear
+```
+
+`R2_PREFIX` decides where it lands: `prod` is the live site, and the dry run
+prints the bucket and prefix first. The push goes through the editor's own
+draft, upload and publish services, fires the deploy hook, then reads every
+staged file back from R2 and deletes what matches, the source last. While
+anything is staged, `npm test` fails its engine-purity tripwire on purpose.
+
+- **It refused.** Nothing was written. The message names the file or field.
+- **It stopped before publishing.** Nothing was removed; fix the cause and run
+  it again. Uploaded folders are not transferred twice.
+- **It kept files.** The post is published. Each kept file is listed with its
+  reason; run the push again to send a change or finish removing the rest.
+- **A draft has unpublished changes.** Publish or discard them in the editor, or
+  pass `--replace-draft`; the replaced revisions stay in the draft's history.
+- **Several drafts share the address.** Pass `--post <postId>`.
+
+Two limits: a folder cannot be pushed back to an earlier revision than the post
+already has, and removing an interactive from a post is an API action
+(`DELETE /api/uploads/?postId=…&interactiveId=…`), not something a push does.
+
 ---
 
 ## 8. Operations
@@ -480,6 +512,7 @@ node --env-file=.env scripts/probe-r2.mjs        # R2 capability probe
 node --env-file=.env scripts/verify-store.mjs    # storage layer against real R2
 node --env-file=.env scripts/verify-publish.mjs  # publish, unpublish, roll back, build
 node --env-file=.env scripts/verify-uploads.mjs  # presigned uploads and CORS
+node --env-file=.env scripts/verify-push.mjs     # staging push: bundles, publish, clear
 node --env-file=.env scripts/verify-restore.mjs # back up, lose everything, restore, rebuild
 ```
 

@@ -119,6 +119,32 @@ test("the rendered page carries the fallback, and the lab's address for the engi
   assert.match(html, /data-interactive-src="\/demos\/a-post\/orbit\/iv_[0-9a-f]{16}\/index\.html"/);
 });
 
+test("a lab with a newer revision publishes that revision and only that one", async () => {
+  // Found by the staging push (6E), the first caller to give one interactive a
+  // second revision: the published revision listed every stored revision of a
+  // used id, so the build emitted stale bundles beside the one the page names.
+  const h = await harness();
+  const post = await newPost(h);
+  const first = await attach(h, post.postId);
+  const changed = { ...FILES, "demo.mjs": "export const ready = 2;\n" };
+  const agreed = await h.interactives.begin({ postId: post.postId, manifest: manifest(changed), interactiveId: first.id });
+  for (const [name, body] of Object.entries(changed)) {
+    await h.store.put(keys.upload(post.postId, agreed.uploadId, `files/${name}`), Buffer.from(body));
+  }
+  const second = await h.interactives.complete({ postId: post.postId, uploadId: agreed.uploadId });
+  assert.notEqual(second.revisionId, first.revisionId);
+
+  await h.publisher.publish(await saveBody(h, post, `::demo[${first.id}]`));
+  const revision = await storedRevision(h, post.postId);
+
+  assert.deepEqual(revision.interactives.map((i) => i.revisionId), [second.revisionId]);
+  assert.ok(revision.body.includes(`/${second.revisionId}/index.html`));
+  const { dist, stats } = await buildInto(h);
+  assert.equal(stats.bundleFiles, Object.keys(changed).length, "a stale revision was emitted");
+  assert.ok(!fs.existsSync(path.join(dist, "demos", "a-post", "orbit", first.revisionId)));
+  fs.rmSync(dist, { recursive: true, force: true });
+});
+
 test("publishing refuses a reference to an interactive the post does not own", async () => {
   const h = await harness();
   const mine = await newPost(h, "mine");

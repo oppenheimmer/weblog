@@ -164,10 +164,10 @@ twice gives `image.png` and `image-2.png`. Published pages carry each image's
 width and height, so the page does not jump as images load. Snippets render
 inline as part of the article.
 
-### Interactive posts *(planned, not implemented)*
+### Interactive posts
 
-Interactive publishing will have two explicit paths. The choice describes how closely the animation needs to
-work with the article:
+Interactive publishing has two explicit paths. The choice describes how closely the animation needs to work with
+the article:
 
 | Path | Markdown | Use it for | Where its code runs |
 | --- | --- | --- | --- |
@@ -177,38 +177,40 @@ work with the article:
 An article figure intentionally has the same page access as the blog's own JavaScript. That is what lets it react
 to nearby text or scrolling. Only an interactive folder explicitly attached, verified and published by the owner
 can receive this access; ordinary Markdown still cannot contain raw HTML, `<script>` elements or script
-frontmatter. A figure exports a standard `mount(element, options)` function, and the engine gives it a unique
-element on its post page. Its code does not run in the feed or tag listings.
+frontmatter. A figure's entry is a `.mjs` module exporting `mount(root, context)`, and the engine gives it a
+unique element on its post page. Its code does not run in the feed or tag listings.
 
-An interactive lab is an ordinary small web folder displayed inside a sealed frame. JavaScript, canvas, SVG,
-WebGL and controls work inside it, but it cannot read the article, editor or login session. Both the iframe and
-the lab page's response apply the sandbox, so opening the lab URL directly does not remove the protection. A
-small checked message channel may pass presentation values such as theme, reduced-motion preference and height.
+An interactive lab is an ordinary small web folder displayed inside a sealed frame. JavaScript, canvas, WebGL and
+controls work inside it, but it cannot read the article, editor or login session. Both the iframe and the lab
+page's response apply the sandbox, so opening the lab URL directly does not remove the protection. A small checked
+message channel passes presentation values: theme, reduced-motion preference and height.
 
 Everything remains on **`blog.souravmishra.net`**. There is no separate demo hostname. The `/demos/` path receives
 special sandbox headers, while its immutable public asset files receive only the narrow read permission needed
 for local module imports and data files. Editor and API responses never receive that permission. Outside scripts,
-CDNs and data services are not part of either path: Distill, D3, fonts, data and other dependencies must be hosted
-by this blog.
+CDNs and data services are not part of either path. A bundle may declare a library the engine vendors — today
+only `distill` — and never a URL.
 
-Both paths upload an immutable folder with a manifest and a required static fallback. For example:
+Both paths publish an immutable folder with a required static HTML fallback. For example:
 
 ```text
 double-pendulum/
-├── index.html
+├── index.html        the lab's entry (a figure's is a .mjs module)
+├── fallback.html     what listings, printers and readers without JavaScript get
 ├── demo.js
 ├── demo.css
-├── equations.json
-└── fallback.png
+└── equations.json
 ```
 
 R2 places that folder below generated post, interactive and revision ids for safe ownership. It does **not**
 rename `demo.js` or break `./equations.json`. The build maps those private ids to a readable, revisioned public
-path such as `/demos/<post-slug>/double-pendulum/<revision>/`; every relative filename remains unchanged.
+path such as `/demos/<post-slug>/double-pendulum/<revision>/`; every relative filename remains unchanged. SVG,
+extra HTML pages and files outside the folder are refused, and a fallback is checked against a small allowlist
+rather than cleaned.
 
-The ordinary editor preview remains script-free. A deliberate **Run interactive preview** action will execute a
-lab in its production sandbox or grant a verified article figure its documented page access. Listings, printing,
-no-JavaScript browsers, loading and failures show the required fallback instead.
+The ordinary editor preview remains script-free, and the editor cannot attach a bundle yet: a deliberate **Run
+interactive preview** action and a bundle panel are still to come. Listings, printing, no-JavaScript browsers,
+loading and failures show the required fallback instead.
 
 Every generated public page carries a CSP. Article figures may import modules
 and fetch data from this site, but third-party script and data connections are
@@ -216,9 +218,37 @@ refused. The two fixed inline head scripts are admitted by exact hashes; Google
 Fonts is named only for styles and fonts. Bundles therefore have to be
 self-contained rather than merely promise to be.
 
-Interactive folders are content, not engine code. They live in R2, never in Git. A future staging push may send a
-Markdown file and its interactive folders through the same publication service, verify every uploaded byte, and
-remove only the confirmed local files. The folder must be empty after a successful push.
+#### Pushing a post with its interactives
+
+Interactive folders are content, not engine code. They live in R2, never in Git. Today they reach a post through
+the **staging push**, a second front end to the same publication service the editor uses. Stage one post per
+folder, naming each interactive by its folder:
+
+```text
+staging/double-pendulum/
+├── post.md                 frontmatter and body; ::demo[lab] and ::figure[energy]
+├── lab/                    index.html, fallback.html, …
+└── energy/
+    ├── interactive.json    optional: {"entry": "chart.mjs", "dependencies": ["distill"]}
+    ├── chart.mjs
+    └── fallback.html
+```
+
+```bash
+node --env-file=.env scripts/push.mjs staging/double-pendulum          # what it would do
+node --env-file=.env scripts/push.mjs staging/double-pendulum --apply  # push, publish, clear
+```
+
+A lab's entry defaults to `index.html`, a figure's to `main.mjs`, and either fallback to `fallback.html`. The push
+saves the draft with interactive ids where the source named folders, uploads each folder on signed URLs, and
+publishes. Only then does it read every file back from R2, compare it with the bytes on disk, and delete what
+matches — each folder whole, the source last. The folder is empty after a successful push.
+
+It refuses before writing anything when a file would be left behind, a path is a link, frontmatter sets anything
+beyond title, date, slug, description, tags and format, or a folder breaks the bundle contract. A push that fails
+deletes nothing; a file changed during the push keeps its folder and the source; running the push again resumes.
+Pushing to an address that already has a post updates that post, reusing interactives by name, and refuses to
+replace a draft with unpublished editor changes unless given `--replace-draft`.
 
 ### Feed and table
 
@@ -259,7 +289,7 @@ Posts published from the editor can never set these hooks, and their raw HTML
 is escaped. In listings, a post that uses a hook appears as its title and
 description with a link rather than inline, because its code assumes it owns
 the page. It runs on its own page, once. This compatibility path is not the
-planned R2 interactive system above: Distill supplies article components and
+R2 interactive system above: Distill supplies article components and
 layout, while the post's own linked JavaScript supplies its animation.
 
 ---
@@ -664,9 +694,10 @@ uploads/<postId>/<uploadId>/…
 attachments/<postId>/…
 ```
 
-Planned interactive bundles extend this ownership tree with
-`interactives/<postId>/<interactiveId>/<revision>/…`. Their readable public
-paths are produced by the build; the private keys never appear in Markdown.
+Interactive bundles extend this ownership tree with
+`interactives/<postId>/<interactiveId>/<revision>/…` and their published copies
+under `published/interactives/`. Their readable public paths are produced at
+publish time; the private keys never appear in a public page.
 
 That bounds the blast radius. A global mark-and-sweep that misses one edge
 deletes across every post; here a mistake can only damage the post already being

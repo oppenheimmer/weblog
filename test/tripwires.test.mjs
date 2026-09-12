@@ -429,6 +429,24 @@ test("tripwire: the repository is an engine and holds no content", () => {
   );
 });
 
+test("tripwire: a staged post is ignored by git while it waits to be pushed", (t) => {
+  // §3.6: staging is a spool, and the push empties it. Ignoring it is the
+  // second lock, for the time a post spends there — not a licence to keep one,
+  // which the engine-purity tripwire above still refuses.
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: ROOT, stdio: "ignore" });
+  } catch {
+    t.skip("not a git checkout, so git's ignore rules cannot be asked");
+    return;
+  }
+  for (const file of ["staging/post.md", "staging/a-post/post.md", "staging/a-post/lab/demo.mjs"]) {
+    assert.doesNotThrow(
+      () => execFileSync("git", ["check-ignore", "--no-index", "-q", file], { cwd: ROOT, stdio: "ignore" }),
+      `${file} is not ignored by git`
+    );
+  }
+});
+
 test("tripwire: the post listing exposes a well-formed table to assistive tech", () => {
   // This was once an ARIA table built from divs, and the tag column fell out of
   // the accessibility tree because one branch forgot role="cell". A native
