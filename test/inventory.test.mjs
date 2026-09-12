@@ -14,8 +14,8 @@ import { loadPublishedPosts } from "../lib/server/published.mjs";
 import { keys, classifyKey, ownedPrefixes, mediaUrl } from "../lib/server/keys.mjs";
 import { computeRevisionId, validateManifest } from "../lib/interactives.mjs";
 import {
-  buildInventory, collectableForPost, collectGarbage, deletePostObjects,
-  refreshInventory, formatTree, INVENTORY_KEY,
+  buildInventory, collectableForPost, collectGarbage, collectableJobs, deletePostObjects,
+  refreshInventory, formatTree, RETENTION, INVENTORY_KEY,
 } from "../lib/server/inventory.mjs";
 import { createFakeS3, FAKE_CONFIG } from "./helpers/fake-r2.mjs";
 
@@ -276,6 +276,87 @@ test("a bundle revision is named by its contents, so the key cannot drift", () =
   const key = keys.interactiveManifest(A, BUNDLE, revisionId);
   assert.equal(classifyKey(key).revisionId, revisionId);
   assert.equal(classifyKey(key).kind, "interactive-manifest");
+});
+
+// ------------------------------------------------------------------- jobs
+
+test("a job is kept while the index still names its revision", async () => {
+  // The publisher answers a repeated publish with the stored job only while the
+  // index still names that revision at that slug. Collection reads the same
+  // rule the other way round, so the two cannot disagree about when a job
+  // still matters.
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  backdate(client, "publications/", 400 * DAY);
+
+  const tree = await buildInventory(store);
+  assert.equal(tree.jobs.length, 1, "the inventory does not see publication jobs");
+  assert.deepEqual(await collectableJobs(store, tree), [], "a live post's job was collected");
+
+  const swept = await collectGarbage(store, { apply: true });
+  assert.ok(!swept.keys.some((key) => key.startsWith("publications/")),
+    "a job answering for the published revision was swept");
+});
+
+test("a job outlives its retention window only once it can answer for nothing", async () => {
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  // Off the site: the index no longer names the revision, so no repeat can be
+  // answered by this job.
+  await publisher.unpublish(A);
+  backdate(client, "publications/", 400 * DAY);
+
+  const tree = await buildInventory(store);
+  const doomed = await collectableJobs(store, tree);
+  assert.equal(doomed.length, 1, "an unanswerable job was kept for ever");
+
+  const swept = await collectGarbage(store, { apply: true });
+  assert.ok(swept.keys.some((key) => key.startsWith("publications/")));
+  assert.deepEqual(
+    (await store.listAll("publications/")).map(({ key }) => key), [],
+    "the job survived a sweep that named it"
+  );
+});
+
+test("a job inside its window is kept even when it can answer for nothing", async () => {
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  await publisher.unpublish(A);
+  // Old enough to be swept at all, far short of the job window.
+  backdate(client, "publications/", 2 * DAY);
+
+  const tree = await buildInventory(store);
+  assert.deepEqual(await collectableJobs(store, tree), [],
+    "a recent job was collected; a finished job is the record of what happened");
+  assert.ok(RETENTION.publicationJobMs > 2 * DAY);
+});
+
+test("discarding a post leaves its jobs to the retention window, not for ever", async () => {
+  // The gap this closes: a job id is derived from post and revision rather
+  // than nested under either, so deleting a post's prefixes cannot reach one.
+  const { store, publisher, drafts, client } = harness();
+  const created = await drafts.create({ title: "A post", body: "text" });
+  await publisher.publish(complete({ postId: created.draft.postId, slug: "gone" }));
+  await publisher.unpublish(created.draft.postId);
+  await deletePostObjects(store, created.draft.postId, { apply: true });
+
+  assert.equal((await store.listAll("publications/")).length, 1,
+    "deleting a post reached a shared record, which scoping forbids");
+
+  backdate(client, "publications/", 400 * DAY);
+  await collectGarbage(store, { apply: true });
+  assert.deepEqual((await store.listAll("publications/")).map(({ key }) => key), []);
+});
+
+test("a scoped sweep never names a job", async () => {
+  const { store, publisher, client } = harness();
+  await publisher.publish(complete());
+  await publisher.unpublish(A);
+  backdate(client, "", 400 * DAY);
+
+  const swept = await collectGarbage(store, { apply: false, postId: A });
+  assert.ok(!swept.keys.some((key) => key.startsWith("publications/")),
+    "a post-scoped sweep reached beyond that post");
 });
 
 // ------------------------------------------------------ what must survive
