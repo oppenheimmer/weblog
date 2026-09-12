@@ -230,6 +230,7 @@ export async function startEditorHarness({ shots = null } = {}) {
       call,
       send,
       sessionId,
+      targetId,
       browserContextId,
       dialogs,
       resize,

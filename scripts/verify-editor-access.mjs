@@ -16,14 +16,14 @@ import path from "node:path";
 
 import { startEditorHarness, ROOT, PASSWORD, sleep } from "./editor-harness.mjs";
 import { cannotRun } from "./chromium.mjs";
-import { createDraftStore } from "../lib/server/drafts.mjs";
+import { createDraftStore, newPostId, newRevisionId } from "../lib/server/drafts.mjs";
 import { identify } from "../lib/media.mjs";
 
 const DIAGRAM = path.join(ROOT, "test/fixtures/assets/images/diagram.png");
 const TITLE = "Keyboard and assistive checks";
 
 const harness = await startEditorHarness();
-const { SITE, store, hooks, finishBuild, openPage, check, scriptErrors, serverErrors } = harness;
+const { SITE, store, hooks, publisher, finishBuild, openPage, check, scriptErrors, serverErrors } = harness;
 
 // The roles a person can operate. Each needs a name, or a screen reader
 // announces "button" and nothing else.
@@ -196,7 +196,8 @@ try {
     const expected = await page.eval(`[...document.querySelectorAll(
       "a[href], button, input, select, textarea, iframe, [tabindex]:not([tabindex='-1'])")]
       .filter((el) => !el.disabled && el.type !== "hidden" && el.checkVisibility())
-      .map((el) => el.id || el.getAttribute("aria-label") || el.textContent.trim() || el.tagName)`);
+      .map((el) => el.id || el.getAttribute("aria-label") || el.querySelector(".draft-title")?.textContent ||
+        el.textContent.trim() || el.tagName)`);
     await page.eval(`(() => { document.activeElement?.blur(); window.scrollTo(0, 0); })()`);
     const reached = new Map();
     const unseen = [];
@@ -208,7 +209,10 @@ try {
         const style = getComputedStyle(el);
         const ring = (style.outlineStyle !== "none" && style.outlineWidth !== "0px") || style.boxShadow !== "none";
         return {
-          key: el.id || el.getAttribute("aria-label") || el.textContent.trim() || el.tagName,
+          // A list button's text carries its save time, which an autosave
+          // during the walk changes; its title is what identifies it.
+          key: el.id || el.getAttribute("aria-label") || el.querySelector(".draft-title")?.textContent ||
+            el.textContent.trim() || el.tagName,
           visible: el.checkVisibility() && el.getBoundingClientRect().width > 0,
           ring,
         };
@@ -366,6 +370,12 @@ try {
 
   // ---- panel actions ---------------------------------------------------------
   console.log("\nPanel actions:");
+  // A post with no draft, as migration left one, published from elsewhere. The
+  // editor's list picks it up on its next refresh, which Unpublish performs.
+  await publisher.publish({
+    postId: newPostId(), revisionId: newRevisionId(1), version: 1, title: "Branch me",
+    date: "2026-09-01", description: "", tags: [], format: "markdown", body: "Published elsewhere.", slug: "branch-me",
+  });
   await page.eval(`document.getElementById("publication-unpublish").focus()`);
   await page.press("Enter");
   await check("Unpublish hides its own button, and focus moves to Put back rather than the page", async () => {
@@ -373,6 +383,48 @@ try {
     await sleep(200);
     return (await page.eval(active)) === "publication-rollback" || await page.eval(active);
   });
+
+  await page.eval(`[...document.querySelectorAll("#publication-list button")]
+    .find((button) => button.textContent.includes("Branch me")).focus()`);
+  await page.press("Enter");
+  await page.until(`!document.getElementById("publication-branch").hidden &&
+    document.getElementById("publication-summary").textContent.includes("Branch me")`);
+  await page.eval(`document.getElementById("publication-branch").focus()`);
+  await page.press("Enter");
+  await check("Edit as draft hides its own button, and focus moves to the draft it opened", async () => {
+    await page.until(`document.getElementById("save-state").textContent === "draft created from published revision"`);
+    await sleep(200);
+    return (await page.eval(active)) === "title" || await page.eval(active);
+  });
+
+  console.log("\nComing back to the tab:");
+  await page.eval(`document.getElementById("new-post").focus()`);
+  await page.press("Enter");
+  await focusEnd("title");
+  await page.insertText("Claimed elsewhere");
+  await focusEnd("body");
+  await page.insertText("Words.");
+  await page.until(`document.getElementById("publish-readiness").textContent ===
+    "Ready to publish at /claimed-elsewhere/ with no attachments."`);
+  // Another tab takes the address while this one is in the background. Focus
+  // emulation, which the clipboard needed, keeps a page visible whatever tab
+  // is in front, so it goes first.
+  await call("Emulation.setFocusEmulationEnabled", { enabled: false });
+  const { targetId: other } = await page.send("Target.createTarget", { url: "about:blank", browserContextId: page.browserContextId });
+  await page.send("Target.activateTarget", { targetId: other });
+  await page.until(`document.visibilityState === "hidden"`);
+  await publisher.publish({
+    postId: newPostId(), revisionId: newRevisionId(1), version: 1, title: "Claimed elsewhere",
+    date: "2026-09-01", description: "", tags: [], format: "markdown", body: "First.", slug: "claimed-elsewhere",
+  });
+  await page.send("Target.activateTarget", { targetId: page.targetId });
+  await check("returning to the tab re-checks Publish, with no edit, and names the address now taken", async () => {
+    const text = await page.until(`document.visibilityState === "visible" &&
+      document.getElementById("publish-readiness").dataset.state === "error" &&
+      document.getElementById("publish-readiness").textContent`);
+    return /already used by another post/.test(text) || text;
+  });
+  await page.send("Target.closeTarget", { targetId: other });
 
   // ---- signing out --------------------------------------------------------------
   console.log("\nSigning out:");

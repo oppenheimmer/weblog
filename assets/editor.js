@@ -1150,12 +1150,17 @@ async function branchShown() {
     const revisionId = els.publicationRevision.value;
     if (!publication || !revisionId) return;
     if (state.savePromise) await state.savePromise;
+    const hadFocus = els.publication.contains(document.activeElement);
     if (isDirty() && !confirm("This draft has unsaved changes. Discard them and edit the published post?")) return;
     const { data } = await api("/api/drafts/", {
         method: "POST", body: { action: "branch", postId: publication.postId, revisionId },
     });
     await loadDraft(data.draft, data.etag);
     setStatus(data.created ? "draft created from published revision" : `saved · v${data.draft.version}`);
+    // The button hides itself once the post has a draft, which dropped
+    // keyboard focus to the page. The draft it opened is where the author is
+    // going next.
+    if (hadFocus) els.title.focus();
 }
 
 async function rebuildSite() {
@@ -1382,6 +1387,12 @@ window.addEventListener("keydown", (event) => {
         event.preventDefault();
         save();
     }
+});
+
+// Back from another tab, where this post, its attachments or its address may
+// have changed: say again what Publish would do, without waiting for an edit.
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state.csrf) scheduleReadiness();
 });
 
 window.addEventListener("beforeunload", (event) => {
