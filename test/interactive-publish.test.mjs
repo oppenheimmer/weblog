@@ -134,17 +134,55 @@ test("publishing refuses a reference to an interactive the post does not own", a
   );
 });
 
-test("publishing refuses a figure, because nothing can run one yet", async () => {
+test("a figure publishes to the assets tree, not the sandboxed one", async () => {
   const h = await harness();
   const post = await newPost(h);
-  const figure = await attach(h, post.postId,
-    { "main.mjs": "export const mount = () => {};\n", "fallback.html": "<p>still</p>" },
-    { kind: "figure", entry: "main.mjs" });
+  const figure = await attach(h, post.postId, {
+    "main.mjs": "export const mount = () => {};\n",
+    "fallback.html": "<p>A still chart.</p>",
+  }, { kind: "figure", entry: "main.mjs", name: "loss-surface" });
 
-  const ready = await saveBody(h, post, `::figure[${figure.id}]`);
+  await h.publisher.publish(await saveBody(h, post, `::figure[${figure.id}]`));
+  const revision = await storedRevision(h, post.postId);
+
+  assert.equal(revision.interactives.length, 1);
+  assert.equal(revision.interactives[0].kind, "figure");
+  // The two pathways differ by prefix, which is what lets response headers
+  // treat them differently: a lab is sandboxed, a figure is page code.
+  assert.match(revision.body, /\/assets\/figures\/a-post\/loss-surface\/iv_[0-9a-f]{16}\/main\.mjs/);
+  assert.ok(!revision.body.includes("/demos/"), "a figure was published under the lab prefix");
+});
+
+test("a figure and a lab can share a page without colliding", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const lab = await attach(h, post.postId);
+  const figure = await attach(h, post.postId, {
+    "main.mjs": "export const mount = () => {};\n",
+    "fallback.html": "<p>A still chart.</p>",
+  }, { kind: "figure", entry: "main.mjs", name: "loss-surface" });
+
+  await h.publisher.publish(await saveBody(h, post, `::figure[${figure.id}]\n\n::demo[${lab.id}]`));
+  const [published] = await loadPublishedPosts({ store: h.store });
+
+  assert.equal(published.interactives.length, 2);
+  // Each gets its own root or frame, and the figure's root id is derived from
+  // its own public path, so two of them cannot share an id.
+  assert.match(published.html, /class="interactive interactive--figure"/);
+  assert.match(published.html, /id="figure-loss-surface-iv_[0-9a-f]{16}"/);
+  assert.match(published.html, /data-interactive="demo"/);
+  assert.ok(!/<iframe/i.test(published.html), "static HTML shipped a frame");
+});
+
+test("a figure declaring a library the engine does not serve is refused", async () => {
+  const h = await harness();
+  const post = await newPost(h);
   await assert.rejects(
-    () => h.publisher.publish(ready),
-    (err) => err.code === "figure_unavailable"
+    () => attach(h, post.postId, {
+      "main.mjs": "export const mount = () => {};\n",
+      "fallback.html": "<p>still</p>",
+    }, { kind: "figure", entry: "main.mjs", dependencies: ["d3"] }),
+    (err) => err.code === "invalid_dependency"
   );
 });
 
@@ -200,6 +238,29 @@ test("the build emits a bundle at its public path, byte for byte", async () => {
   }
   // index.html says ./demo.mjs, so demo.mjs has to be its neighbour.
   assert.ok(fs.existsSync(path.join(dist, "demos", "a-post", "orbit", bundle.revisionId, "demo.mjs")));
+  fs.rmSync(dist, { recursive: true, force: true });
+});
+
+test("the build emits a figure into the assets tree, beside its own files", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const files = {
+    "main.mjs": "import { draw } from './lib/draw.mjs';\nexport const mount = draw;\n",
+    "lib/draw.mjs": "export const draw = () => {};\n",
+    "fallback.html": "<p>A still chart.</p>",
+  };
+  const figure = await attach(h, post.postId, files,
+    { kind: "figure", entry: "main.mjs", name: "loss-surface" });
+  await h.publisher.publish(await saveBody(h, post, `::figure[${figure.id}]`));
+
+  const { dist } = await buildInto(h);
+  const base = path.join(dist, "assets", "figures", "a-post", "loss-surface", figure.revisionId);
+  for (const [name, body] of Object.entries(files)) {
+    assert.equal(fs.readFileSync(path.join(base, name), "utf8"), body, name);
+  }
+  // main.mjs imports ./lib/draw.mjs, so that path has to survive intact.
+  assert.ok(fs.existsSync(path.join(base, "lib", "draw.mjs")));
+  assert.ok(!fs.existsSync(path.join(dist, "demos")), "a figure was emitted under the lab prefix");
   fs.rmSync(dist, { recursive: true, force: true });
 });
 

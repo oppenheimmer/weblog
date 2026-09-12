@@ -111,14 +111,24 @@ const server = http.createServer((req, res) => {
     // chrome — the figure markup and the upgrade to an iframe are the shipping
     // code, which is the only way to measure that a listing runs nothing.
     if (mode.target === "post-page" || mode.target === "listing-page") {
-      const payload = JSON.stringify({
-        kind: "demo", name: "probe-lab",
-        src: `${DEMO_BASE}index.html`,
-        fallback: "<p>A still picture of the lab.</p>",
-      });
-      const article = mdBrowser.render(
-        `Before.\n\n\`\`\`${INTERACTIVE_FENCE}\n${payload}\n\`\`\`\n\nAfter.\n`
-      );
+      const fence = (payload) =>
+        `\`\`\`${INTERACTIVE_FENCE}\n${JSON.stringify(payload)}\n\`\`\``;
+      const blocks = [
+        fence({
+          kind: "demo", name: "probe-lab",
+          src: `${DEMO_BASE}index.html`,
+          fallback: "<p>A still picture of the lab.</p>",
+        }),
+      ];
+      if (mode.withFigure) {
+        blocks.push(fence({
+          kind: "figure", name: "probe-figure",
+          src: `${FIGURE_BASE}main.mjs`,
+          dependencies: [],
+          fallback: "<p>A still chart.</p>",
+        }));
+      }
+      const article = mdBrowser.render(`Before.\n\n${blocks.join("\n\n")}\n\nAfter.\n`);
       const bodyClass = mode.target === "post-page" ? "blog-page post-page" : "blog-page list-page";
       return html(`<!doctype html><title>clean</title>
 <body class="${bodyClass}">
@@ -133,7 +143,7 @@ ${article}
   // The page's own report of what the engine did, so the oracle is the
   // rendered result rather than this check's opinion of it.
   setTimeout(function () {
-    var frame = document.querySelector(".interactive iframe");
+    var frame = document.querySelector('figure[data-interactive="demo"] iframe');
     new Image().src = "/hit/page-frame/" + (frame
       ? encodeURIComponent(frame.getAttribute("sandbox") + "|" + frame.getAttribute("referrerpolicy"))
       : "none");
@@ -142,6 +152,12 @@ ${article}
         new Image().src = "/hit/page-height/" + encodeURIComponent(frame.style.height || "unset");
       }, 900);
     }
+    setTimeout(function () {
+      var fig = document.querySelector('figure[data-interactive="figure"]');
+      new Image().src = "/hit/page-figure/" + encodeURIComponent(fig
+        ? [fig.className, (fig.querySelector(".interactive-root") || {}).textContent || ""].join("|")
+        : "absent");
+    }, 900);
   }, 600);
 </script>`);
     }
@@ -380,6 +396,30 @@ check("…while ignoring a height outside what a page may be",
   value(postPage, "hit page-height/"));
 check("…and a message type the bridge does not define",
   postPage.title === "clean", postPage.title);
+
+// ---- 8. the other pathway again, on a real page --------------------------
+
+const figurePage = await run("figure page", { target: "post-page", withFigure: true },
+  { alive: "hit page-ready" });
+console.log("\nAn article figure on a post page, mounted by the engine:");
+check("the engine calls mount(root, context) with what only it knows",
+  value(figurePage, "hit figure-mount/") === "figure,light,false,number",
+  value(figurePage, "hit figure-mount/"));
+check("the figure draws into the root it was given, and the fallback steps aside",
+  value(figurePage, "hit page-figure/").includes("interactive--live") &&
+  value(figurePage, "hit page-figure/").includes("mounted"),
+  value(figurePage, "hit page-figure/"));
+check("a lab on the same page is unaffected",
+  has(figurePage, "hit inline-ran") && postPage.title === "clean");
+
+const figureListing = await run("figure in a listing", { target: "listing-page", withFigure: true },
+  { alive: "hit page-ready" });
+console.log("\nThe same figure in a listing, where §3.6 says nothing may run:");
+check("its module is never imported", !hasPrefix(figureListing, "hit figure-mount/"));
+check("the fallback is what remains",
+  value(figureListing, "hit page-figure/").includes("interactive--figure") &&
+  !value(figureListing, "hit page-figure/").includes("interactive--live"),
+  value(figureListing, "hit page-figure/"));
 
 const listingPage = await run("listing page", { target: "listing-page" }, { alive: "hit page-ready" });
 console.log("\nThe same article in a listing, where §3.6 says nothing may run:");

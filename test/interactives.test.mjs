@@ -8,11 +8,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import fs from "node:fs";
+import path from "node:path";
+
 import {
   validateManifest, normalizeBundlePath, bundleTypeFor, computeRevisionId,
   sanitizeInteractiveName, publicBundlePath, publicFileUrl, extensionOf,
   InteractiveError, LIMITS, INTERACTIVE_REVISION_PATTERN, VENDORED_DEPENDENCIES,
+  VENDORED_SOURCES,
 } from "../lib/interactives.mjs";
+import { ROOT } from "./helpers/build-fixture.mjs";
 
 const POST = "p_00000000000000aa";
 const hash = (n) => String(n).repeat(64).slice(0, 64);
@@ -192,11 +197,27 @@ test("file types a bundle may not contain are refused by name", () => {
 });
 
 test("a dependency is a name the engine vendors, never a URL", () => {
-  assert.deepEqual(validateManifest(demo({ dependencies: ["d3"] })).dependencies, ["d3"]);
-  for (const dependency of ["https://cdn.example.com/d3.js", "../d3.mjs", "left-pad", "D3"]) {
+  assert.deepEqual(validateManifest(demo({ dependencies: ["distill"] })).dependencies, ["distill"]);
+  for (const dependency of ["https://cdn.example.com/d3.js", "../d3.mjs", "left-pad", "Distill", "d3"]) {
     assert.equal(refusal(demo({ dependencies: [dependency] })).code, "invalid_dependency");
   }
-  assert.ok(VENDORED_DEPENDENCIES.length > 0, "nothing is vendored, so no bundle can declare anything");
+});
+
+test("every vendored name is something this engine actually serves", () => {
+  // A dependency is a promise: the page has to be able to load it. §3.6 named
+  // d3 as an example and the repository does not vendor it, so accepting the
+  // name would publish a figure that resolves, builds, and then fails in the
+  // reader's browser.
+  const vendor = path.join(ROOT, "assets", "vendor");
+  for (const name of VENDORED_DEPENDENCIES) {
+    const source = VENDORED_SOURCES[name];
+    assert.ok(source, `${name} is offered to bundles with no source`);
+    assert.ok(source.startsWith("/assets/"), `${name} is served from off-site: ${source}`);
+    assert.ok(
+      fs.existsSync(path.join(vendor, path.basename(source))),
+      `${name} is offered to bundles but ${source} is not in the repository`
+    );
+  }
 });
 
 // -------------------------------------------------------------- ownership
@@ -334,6 +355,47 @@ test("the renderer refuses a payload a resolver would not have written", () => {
   const html = renderInteractive(JSON.stringify(good));
   assert.ok(!/<iframe/i.test(html), "static HTML shipped an iframe");
   assert.match(html, /data-interactive-src="\/demos\/a-post\/orbit\/iv_00000000000000c1\/index\.html"/);
+});
+
+test("a figure payload is refused unless it names a module the engine published", () => {
+  const good = {
+    kind: "figure", name: "loss-surface", dependencies: ["distill"],
+    src: "/assets/figures/a-post/loss-surface/iv_00000000000000c1/main.mjs",
+    fallback: "<p>A still chart.</p>",
+  };
+  assert.ok(readInteractivePayload(JSON.stringify(good)), "a legitimate figure was refused");
+
+  for (const bad of [
+    // A figure is a module under the assets tree; a lab is a document under
+    // the sandboxed one. Crossing them would grant the wrong privilege.
+    { ...good, src: "/demos/a-post/orbit/iv_00000000000000c1/index.html" },
+    { ...good, src: "/assets/figures/a-post/x/iv_00000000000000c1/index.html" },
+    { ...good, src: "https://evil.example/main.mjs" },
+    { ...good, src: "/assets/figures/a/x/not-a-revision/main.mjs" },
+    // A dependency the engine does not serve. Refused here as well as at
+    // publish, because this is the last check before it becomes a script tag.
+    { ...good, dependencies: ["d3"] },
+    { ...good, dependencies: ["https://cdn.example.com/d3.js"] },
+  ]) {
+    assert.equal(readInteractivePayload(JSON.stringify(bad)), null,
+      `${bad.src} / ${bad.dependencies}`);
+    assert.match(renderInteractive(JSON.stringify(bad)), /interactive--broken/);
+  }
+});
+
+test("a figure's markup gives it a root of its own, and keeps the fallback", () => {
+  const html = renderInteractive(JSON.stringify({
+    kind: "figure", name: "loss-surface", dependencies: ["distill"],
+    src: "/assets/figures/a-post/loss-surface/iv_00000000000000c1/main.mjs",
+    fallback: "<p>A still chart.</p>",
+  }));
+  assert.match(html, /class="interactive interactive--figure"/);
+  assert.match(html, /<div class="interactive-root" id="figure-loss-surface-iv_00000000000000c1">/);
+  assert.match(html, /<div class="interactive-fallback"><p>A still chart\.<\/p><\/div>/);
+  assert.match(html, /data-interactive-deps="distill"/);
+  // A figure is page code, not a frame: the engine imports it, and nothing
+  // about it is an iframe.
+  assert.ok(!/<iframe/i.test(html));
 });
 
 test("a fallback is validated rather than cleaned", () => {

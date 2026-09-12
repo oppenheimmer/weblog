@@ -605,3 +605,26 @@ a.chip:hover, a.chip:focus-visible {
         white-space: normal;
     }
 }
+
+/* Article figures (CLAUDE.md §3.6).
+   The root is an organization and styling boundary, not a security one: a
+   figure runs as page code and could ignore it. Scoping exists so a figure's
+   own `button` rule cannot restyle the site around it, which is a courtesy the
+   contract asks for rather than a wall the browser enforces. */
+.interactive-root {
+    display: block;
+}
+
+.interactive--figure .interactive-fallback {
+    /* Visible until the module mounts, and again if it never does. */
+    display: block;
+}
+
+.interactive--figure.interactive--live .interactive-fallback {
+    display: none;
+}
+
+@media print {
+    .interactive--figure.interactive--live .interactive-root { display: none; }
+    .interactive--figure.interactive--live .interactive-fallback { display: block; }
+}

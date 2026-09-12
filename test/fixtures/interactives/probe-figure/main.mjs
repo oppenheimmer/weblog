@@ -7,7 +7,14 @@
 import { label } from "./helper.mjs";
 
 export function mount(root, context) {
+  // What the engine hands a figure, reported so the contract is measured
+  // rather than assumed: the root it must draw into, and engine-owned
+  // presentation values it could not work out for itself.
   root.dataset.mounted = label;
+  root.textContent = "mounted";
+  new Image().src = "/hit/figure-mount/" + encodeURIComponent(
+    [label, context.theme, context.reducedMotion, typeof context.width].join(",")
+  );
   return context;
 }
 

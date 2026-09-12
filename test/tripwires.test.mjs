@@ -332,6 +332,23 @@ test("tripwire: the engine frames a lab with no same-origin access", () => {
     "the engine would upgrade listings, where nothing may run");
 });
 
+test("tripwire: the engine imports a figure only from where it publishes one", () => {
+  // A figure runs with the page's own privileges, so the module's address is
+  // the whole of what separates owner-published code from anything else. The
+  // payload check in lib/interactives.mjs is the first lock; this is the
+  // second, in the code that actually performs the import.
+  const script = fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8");
+  assert.match(script, /indexOf\("\/assets\/figures\/"\)\s*!==\s*0/,
+    "the figure loader imports whatever address it is given");
+  assert.match(script, /classList\.contains\("post-page"\)/,
+    "figures would mount in listings, where §3.6 says nothing may run");
+
+  // Vendored libraries are named by the engine, never by the bundle.
+  const sources = script.match(/var VENDORED_SOURCES = \{([^}]*)\}/);
+  assert.ok(sources, "the engine has no vendored-library table");
+  assert.ok(!/https?:/.test(sources[1]), `a vendored library is loaded off-site: ${sources[1]}`);
+});
+
 test("tripwire: a figure's one document is sandboxed too", () => {
   // A figure is page code and needs no sandbox to do its job — but its bundle
   // may still contain one HTML file, the fallback the contract requires, and

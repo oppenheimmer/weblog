@@ -115,6 +115,27 @@
         fadeEls.forEach(function (el) { el.classList.add("is-visible"); });
     }
 
+    // A vendored library, loaded once and shared by every figure asking for it.
+    // Names are resolved by the engine, never by the bundle: a figure declares
+    // "distill", and where that comes from is this file's business.
+    var vendored = {};
+    var VENDORED_SOURCES = { distill: "/assets/vendor/distill.template.v2.js" };
+
+    function loadVendored(name) {
+        if (!Object.prototype.hasOwnProperty.call(VENDORED_SOURCES, name)) {
+            return Promise.reject(new Error("this engine does not vendor " + name));
+        }
+        if (vendored[name]) return vendored[name];
+        vendored[name] = new Promise(function (resolve, reject) {
+            var tag = document.createElement("script");
+            tag.src = VENDORED_SOURCES[name];
+            tag.onload = resolve;
+            tag.onerror = function () { reject(new Error("could not load " + name)); };
+            document.head.appendChild(tag);
+        });
+        return vendored[name];
+    }
+
     // Interactive labs (CLAUDE.md §3.6).
     //
     // The published page carries only the fallback. The iframe is built here,
@@ -129,6 +150,47 @@
     // on /demos/ says the same thing again, for the case where someone opens
     // the lab's URL directly instead of letting this code frame it.
     if (document.body.classList.contains("post-page")) {
+        // Article figures (§3.6). A figure is the opposite trade from a lab:
+        // it runs as page code, with the same access as this script, because a
+        // Distill-style figure needs the article's own layout, typography and
+        // scroll position and an opaque iframe defeats every one of them. That
+        // grant is deliberate and narrow — the module was uploaded by the
+        // signed-in owner, verified byte for byte, and frozen into a published
+        // revision — and it is why publication resolves a figure to a module
+        // under /assets/figures/ and nothing else can reach here.
+        //
+        // The fallback stays until `mount` returns. A module that throws, or
+        // never loads, leaves the reader the static figure rather than a hole.
+        document.querySelectorAll('figure[data-interactive="figure"]').forEach(function (figure) {
+            var src = figure.getAttribute("data-interactive-src");
+            var root = figure.querySelector(".interactive-root");
+            if (!src || src.indexOf("/assets/figures/") !== 0 || !root) return;
+
+            var deps = (figure.getAttribute("data-interactive-deps") || "").split(/\s+/).filter(Boolean);
+            Promise.all(deps.map(loadVendored)).then(function () {
+                return import(src);
+            }).then(function (module) {
+                if (typeof module.mount !== "function") {
+                    throw new Error("a figure exports no mount(root, context)");
+                }
+                // Engine-owned values only. A figure asks the page nothing; it
+                // is told what it needs and reads the rest from the DOM it was
+                // given, which keeps this a contract rather than an API.
+                return module.mount(root, {
+                    theme: document.documentElement.getAttribute("data-theme") || "light",
+                    reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+                    width: root.clientWidth
+                });
+            }).then(function () {
+                figure.classList.add("interactive--live");
+            }).catch(function (err) {
+                // Deliberately quiet for the reader and loud in the console:
+                // the fallback is already on the page and is the better answer.
+                figure.classList.add("interactive--failed");
+                if (window.console) console.error("figure failed to mount:", src, err);
+            });
+        });
+
         document.querySelectorAll('figure[data-interactive="demo"]').forEach(function (figure) {
             var src = figure.getAttribute("data-interactive-src");
             if (!src || src.charAt(0) !== "/") return;
