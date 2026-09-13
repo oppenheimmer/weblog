@@ -37,7 +37,7 @@ git clone <repo-url> website-blog
 cd website-blog
 npm install        # build dependencies and KaTeX (its CSS and fonts are copied at build)
 npm run build      # generate ./dist
-npm run dev        # build, then serve dist at http://localhost:4321
+npm run dev        # the site and the editor together at http://localhost:3000 (README, Local development)
 npm run clean      # remove ./dist
 npm test           # the full suite; needs no credentials
 ```
@@ -47,8 +47,9 @@ What `npm run build` does (`build.mjs`, single pass):
 1. Wipes and recreates `dist/`.
 2. **Reads the posts.** In order of precedence: `BLOG_POSTS_DIR` if it is set
    (the test and local-fixture path), otherwise R2 if credentials are
-   configured, otherwise the filesystem — which in a clean clone means no posts
-   at all. R2 posts come from `published/index.json` and the frozen revisions it
+   configured, otherwise — on a Vercel preview deployment only — the test
+   fixture corpus, otherwise the filesystem, which in a clean clone means no
+   posts at all. R2 posts come from `published/index.json` and the frozen revisions it
    names; filesystem posts are `.md`/`.tex` files with `---` frontmatter, and
    `draft: true` skips one.
 3. **Fetches and verifies media.** Every image a published revision names is
@@ -126,7 +127,7 @@ browser never can.
    ```
 
    Add any other origin you will run the editor from — a preview deployment or
-   `http://localhost:4321` — as its own entry.
+   `http://localhost:3000` for `npm run dev` against R2 — as its own entry.
 4. Add two **object lifecycle rules** (Settings → Object Lifecycle Rules), each
    deleting objects **1 day after upload**:
 
@@ -184,9 +185,10 @@ reaches shell history, the process list, or a log.
    trailing slashes, the `/editor/` and `/login/` rewrites, and the cache
    headers, so a new project needs no dashboard configuration.
 4. Add the environment variables below, **scoped to Production only**. Preview
-   and Development deployments then hold no credential at all and build an empty
-   site, which is what keeps branch deployments away from production data. Keep
-   it that way when adding a variable.
+   and Development deployments then hold no credential at all, which is what
+   keeps branch deployments away from production data; a preview builds the
+   repository's test fixture posts instead, so it has something to look at, and
+   production never does. Keep it that way when adding a variable.
 
 | Variable | Required | Notes |
 | -------- | -------- | ----- |

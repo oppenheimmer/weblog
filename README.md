@@ -137,7 +137,10 @@ identical to a Markdown post.
 > `\caption{}` inside a `figure` becomes a generic span rather than a styled
 > `<figcaption>`. Commands the renderer does not support, such as `\ref`,
 > `\cite`, or a `tikzpicture`, appear as preview warnings. A `\href` to an
-> unsafe URL renders as plain text.
+> unsafe URL renders as plain text. A document that takes longer than ten
+> seconds to render, or nests too deeply to parse, is refused with a message
+> saying so: 1 MB of ordinary prose and maths, the most a draft may hold, takes
+> about that long.
 
 ### Tags
 
@@ -329,7 +332,7 @@ layout, while the post's own linked JavaScript supplies its animation.
 ```bash
 npm install        # one time: build dependencies and KaTeX (CSS and fonts)
 npm run build      # generate ./dist
-npm run dev        # build, then serve dist at http://localhost:4321
+npm run dev        # the site and the editor together at http://localhost:3000
 npm run clean      # remove ./dist
 npm test           # the full suite; needs no credentials
 npm run test:bless # re-record golden output after an intended change
@@ -337,6 +340,18 @@ npm run test:bless # re-record golden output after an intended change
 
 Requires **Node 24.x** (`.nvmrc`, `engines`); Vercel rejects anything newer.
 `dist/` is gitignored and regenerated on every build and deploy.
+
+`npm run dev` (`scripts/dev.mjs`) serves the built site under `vercel.json`'s
+rewrites, headers, trailing slashes and clean URLs, and the editor, login and
+API from the real function handlers. Where production would fire the deploy
+hook, it rebuilds locally, so a post published at `/editor/` appears on the
+local site and "On the site" follows it. With R2 credentials in `.env` it uses
+that bucket under `R2_PREFIX` (`dev` unless set; `prod` is refused without
+`--allow-prod`), and uploads need the R2 CORS rule to allow
+`http://localhost:3000`. Without credentials, or with `--memory`, it uses an
+in-memory bucket that forgets everything on exit. The password is
+`ADMIN_PASSWORD_HASH`'s when set, otherwise one it prints. Other flags:
+`--port`. Restart it after changing engine code.
 
 To build a set of posts without R2, keep them in a directory outside the
 repository and point the build at it:

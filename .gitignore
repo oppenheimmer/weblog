@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# A local dev rebuild's staging directory (scripts/dev.mjs), swapped in when done.
+dist.building/
 .DS_Store
 *.log
 .vercel

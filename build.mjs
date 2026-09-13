@@ -1,5 +1,8 @@
 // Static site generator: published posts (R2, or BLOG_POSTS_DIR) -> dist/
 // (static HTML, build-time KaTeX math). CLAUDE.md §1.1.
+//
+// `node build.mjs` builds once. `buildSite` and `buildAndReport` are exported
+// for scripts/dev.mjs, which rebuilds in-process against the store it serves.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,33 +24,28 @@ const DIST = process.env.BLOG_DIST_DIR || path.join(ROOT, "dist");
 // Same purpose: lets a test paginate a small corpus. Unset in normal use.
 const FEED_BUDGET = Number(process.env.BLOG_FEED_PAGE_BYTES) || FEED_PAGE_BYTES;
 const KATEX_DIST = path.join(ROOT, "node_modules", "katex", "dist");
+// What a preview deployment shows when it has no R2 credentials, which is every
+// preview (CLAUDE.md Step 2): the test corpus, so a preview is a site to look at
+// rather than an empty one. Never in production.
+const PREVIEW_FIXTURES = path.join(ROOT, "test", "fixtures");
 
 function rmrf(p) {
   fs.rmSync(p, { recursive: true, force: true });
-}
-function write(rel, content) {
-  const file = path.join(DIST, rel);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, content);
-}
-function copyInto(srcDir, destRel) {
-  if (!fs.existsSync(srcDir)) return;
-  fs.cpSync(srcDir, path.join(DIST, destRel), { recursive: true });
 }
 
 // Read post sources from disk and hand them to the shared content pipeline.
 // This is the only part of the generator that knows about files at all; the R2
 // reader will sit beside it and produce the same post objects (CLAUDE.md §1.1).
-function loadPosts() {
-  if (!fs.existsSync(POSTS_DIR)) return [];
+function loadPosts(postsDir = POSTS_DIR) {
+  if (!fs.existsSync(postsDir)) return [];
   const files = fs
-    .readdirSync(POSTS_DIR)
+    .readdirSync(postsDir)
     .filter((f) => f.endsWith(".md") || f.endsWith(".tex"))
     .sort(); // stable input order; ties are broken deterministically downstream
   const posts = [];
 
   for (const file of files) {
-    const raw = fs.readFileSync(path.join(POSTS_DIR, file), "utf8");
+    const raw = fs.readFileSync(path.join(postsDir, file), "utf8");
     // The only ENGINE-trust call site in the project: these files are in the
     // repository, so they are the owner's own and may embed raw HTML and the
     // per-post script hooks. Everything arriving from R2 is untrusted by default.
@@ -69,19 +67,23 @@ function loadPosts() {
  * test harness drives it through BLOG_POSTS_DIR, and a clone of the engine with
  * no credentials should still build something rather than crash.
  */
-async function readPosts() {
+async function readPosts(store) {
   if (process.env.BLOG_POSTS_DIR) {
     console.log("  content: filesystem (BLOG_POSTS_DIR)");
-    return loadPosts();
+    return { posts: loadPosts() };
   }
-  if (hasR2Config()) {
+  if (store || hasR2Config()) {
     const { loadPublishedPosts } = await import("./lib/server/published.mjs");
-    const posts = await loadPublishedPosts();
+    const posts = await loadPublishedPosts(store ? { store } : {});
     console.log(`  content: R2 (${posts.length} published)`);
-    return posts;
+    return { posts };
+  }
+  if (process.env.VERCEL_ENV === "preview") {
+    console.log("  content: test fixtures (a preview deployment with no R2 credentials)");
+    return { posts: loadPosts(path.join(PREVIEW_FIXTURES, "content", "posts")), fixtures: true };
   }
   console.log("  content: filesystem (no R2 credentials configured)");
-  return loadPosts();
+  return { posts: loadPosts() };
 }
 
 /**
@@ -91,16 +93,16 @@ async function readPosts() {
  * The cache lives under node_modules/ because Vercel keeps that directory
  * between builds, which is what stops clean-build cost growing with every post.
  */
-async function syncMedia(posts) {
+async function syncMedia(posts, { store, distDir }) {
   if (!posts.some((post) => post.media?.length || post.interactives?.length)) return;
   const [{ createStore }, { syncPublishedMedia }] = await Promise.all([
     import("./lib/server/r2.mjs"),
     import("./lib/server/media-sync.mjs"),
   ]);
   const stats = await syncPublishedMedia({
-    store: createStore(),
+    store: store ?? createStore(),
     posts,
-    distDir: DIST,
+    distDir,
     cacheDir: path.join(ROOT, "node_modules", ".cache", "weblog-media"),
   });
   console.log(
@@ -110,16 +112,27 @@ async function syncMedia(posts) {
   );
 }
 
-async function build() {
+/** Build the site into `distDir`, from `store` when given, else as configured. */
+export async function buildSite({ store = null, distDir = DIST } = {}) {
+  const write = (rel, content) => {
+    const file = path.join(distDir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  };
+  const copyInto = (srcDir, destRel) => {
+    if (!fs.existsSync(srcDir)) return;
+    fs.cpSync(srcDir, path.join(distDir, destRel), { recursive: true });
+  };
+
   const started = Date.now();
   console.log("Building blog...");
-  rmrf(DIST);
-  fs.mkdirSync(DIST, { recursive: true });
+  rmrf(distDir);
+  fs.mkdirSync(distDir, { recursive: true });
 
-  const posts = await readPosts();
+  const { posts, fixtures } = await readPosts(store);
   // Before any page is written: a missing or corrupt image stops the build
   // here, rather than after half a site has been emitted.
-  await syncMedia(posts);
+  await syncMedia(posts, { store, distDir });
 
   // Per-post pages -> /<slug>/index.html (pretty URLs)
   for (const post of posts) {
@@ -173,6 +186,11 @@ async function build() {
   // Per-post embed assets and vendored libraries (e.g. distill template).
   copyInto(path.join(ASSETS_DIR, "posts"), "assets/posts");
   copyInto(path.join(ASSETS_DIR, "vendor"), "assets/vendor");
+  // The fixture corpus's own images and embed assets, beside the real engine's.
+  if (fixtures) {
+    copyInto(path.join(PREVIEW_FIXTURES, "assets", "images"), "images");
+    copyInto(path.join(PREVIEW_FIXTURES, "assets", "posts"), "assets/posts");
+  }
   for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js"]) {
     const file = path.join(ASSETS_DIR, script);
     if (fs.existsSync(file)) write(path.join("assets", script), fs.readFileSync(file));
@@ -190,7 +208,7 @@ async function build() {
   copyInto(path.join(KATEX_DIST, "fonts"), "styles/fonts");
 
   // Duration on every build, so the growth §3.3 warns about is visible before it bites.
-  console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, DIST)}/ in ${Date.now() - started} ms`);
+  console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, distDir)}/ in ${Date.now() - started} ms`);
 }
 
 /**
@@ -205,14 +223,14 @@ async function build() {
  * and its presence always means "the most recent build failed". Reporting must
  * never mask the real failure, so every error here is swallowed.
  */
-async function reportBuild(failure) {
-  if (!hasR2Config()) return;
+async function reportBuild(failure, given = null) {
+  if (!given && !hasR2Config()) return;
   try {
     const [{ createStore }, { keys }] = await Promise.all([
       import("./lib/server/r2.mjs"),
       import("./lib/server/keys.mjs"),
     ]);
-    const store = createStore();
+    const store = given ?? createStore();
     if (!failure) return void await store.delete(keys.lastBuildFailure);
     await store.put(keys.lastBuildFailure, JSON.stringify({
       schemaVersion: 1,
@@ -227,20 +245,34 @@ async function reportBuild(failure) {
   }
 }
 
-try {
-  await build();
-  await reportBuild(null);
-} catch (err) {
-  // The two failures this system produces itself, and the only two whose cause
-  // is worth a reader's time. Anything else is a bug and keeps its stack.
-  const kind = err instanceof ContentError ? "content"
-    : err?.name === "MediaSyncError" ? "media"
-      : null;
-  if (kind) {
-    console.error(`\n${kind === "content" ? "Content" : "Media"} error: ${err.message}\n`);
-    await reportBuild({ kind, reason: err.message });
+/**
+ * Build, and record the outcome where the editor reads it. Resolves to
+ * `{ ok: true }` or `{ ok: false, kind, reason, error }`, and throws nothing:
+ * a caller decides what a failed build means for it.
+ */
+export async function buildAndReport(options = {}) {
+  try {
+    await buildSite(options);
+    await reportBuild(null, options.store);
+    return { ok: true };
+  } catch (err) {
+    // The two failures this system produces itself, and the only two whose
+    // cause is worth a reader's time. Anything else is a bug and keeps its stack.
+    const kind = err instanceof ContentError ? "content"
+      : err?.name === "MediaSyncError" ? "media"
+        : "build";
+    const reason = kind === "build" ? String(err?.message ?? err).slice(0, 500) : err.message;
+    await reportBuild({ kind, reason }, options.store);
+    return { ok: false, kind, reason, error: err };
+  }
+}
+
+const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invoked) {
+  const result = await buildAndReport();
+  if (!result.ok) {
+    if (result.kind === "build") throw result.error;
+    console.error(`\n${result.kind === "content" ? "Content" : "Media"} error: ${result.reason}\n`);
     process.exit(1);
   }
-  await reportBuild({ kind: "build", reason: String(err?.message ?? err).slice(0, 500) });
-  throw err;
 }
