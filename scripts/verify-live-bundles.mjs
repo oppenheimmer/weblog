@@ -94,8 +94,6 @@ for (const { slug, kind, src } of found) {
       /javascript/.test(header(res, "content-type") ?? ""), { status: res.status, type: header(res, "content-type") });
     check("its path carries the sandbox policy too", header(res, "content-security-policy") === "sandbox allow-scripts",
       header(res, "content-security-policy"));
-    check("it is not readable by other origins", header(res, "access-control-allow-origin") === null,
-      header(res, "access-control-allow-origin"));
   }
 }
 
@@ -105,9 +103,16 @@ console.log("\nThe rest of the site:");
   const { res } = await get(`/${slug}/`);
   const csp = header(res, "content-security-policy") ?? "";
   check("the post page has the public CSP, not a bundle's", /default-src 'none'/.test(csp) && !/sandbox/.test(csp), csp);
-  check("the post page is not readable by other origins", header(res, "access-control-allow-origin") === null);
-  const health = await get("/api/health/");
-  check("the API is not readable by other origins", header(health.res, "access-control-allow-origin") === null);
+  // Vercel sends Access-Control-Allow-Origin: * with every static file it
+  // serves, measured on 2026-09-13 — pages, styles, the feed, 404s — so a
+  // figure's module and a post page carry it whatever vercel.json says. It
+  // never admits a credentialed read, and static output is public anyway. The
+  // boundary that matters is the functions', which answer for private data.
+  for (const path of ["/api/health/", "/api/drafts/", "/login/", "/editor/"]) {
+    const fn = await get(path);
+    check(`${path} is not readable by other origins`, header(fn.res, "access-control-allow-origin") === null,
+      header(fn.res, "access-control-allow-origin"));
+  }
 }
 
 const failed = results.filter((ok) => !ok).length;

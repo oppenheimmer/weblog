@@ -276,9 +276,11 @@ node scripts/verify-live-bundles.mjs
 
 It reads the live site anonymously. Run preview addresses must reach the
 preview function; each published lab must answer with `sandbox allow-scripts`
-and `Access-Control-Allow-Origin: *` and land on its own directory, and each
-figure module with the sandbox policy and no read header. Without a published
-interactive it checks the Run addresses only and exits 2.
+and `Access-Control-Allow-Origin: *` and land on its own directory, each figure
+module with the sandbox policy, and the editor, login and API with no
+`Access-Control-Allow-Origin`. Vercel sends that header with every static file
+itself, so public pages carry it; it never admits a read with cookies. Without
+a published interactive it checks the Run addresses only and exits 2.
 
 ---
 

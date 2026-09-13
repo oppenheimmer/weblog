@@ -193,8 +193,9 @@ page's response apply the sandbox, so opening the lab URL directly does not remo
 message channel passes presentation values: theme, reduced-motion preference and height.
 
 Everything remains on **`blog.souravmishra.net`**. There is no separate demo hostname. The `/demos/` path receives
-special sandbox headers, while its immutable public asset files receive only the narrow read permission needed
-for local module imports and data files. Editor and API responses never receive that permission. Outside scripts,
+special sandbox headers and the read permission a sealed lab needs for its own module imports and data files.
+Vercel itself sends that permission with every static file, which exposes nothing already public; editor, login
+and API responses never receive it. Outside scripts,
 CDNs and data services are not part of either path. A figure may declare a library the engine vendors, and never
 a URL: `distill` (the Distill template's components) or `d3` (D3 7.9.0, the unmodified upstream build, which
 defines the global `d3` before the figure's module is imported). Both are served from `/assets/vendor/`.
