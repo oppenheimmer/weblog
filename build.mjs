@@ -11,6 +11,7 @@ import matter from "gray-matter";
 import { collectPosts, groupByTag, loadPost, ContentError } from "./lib/content.mjs";
 import { ENGINE } from "./lib/sanitize.mjs";
 import { hasR2Config } from "./lib/server/config.mjs";
+import { buildManifest } from "./lib/server/published.mjs";
 import { postPage, listPage, tagPage, notFoundPage, tagSlug, feedWeight } from "./lib/templates.mjs";
 import { listingPages, FEED_PAGE_BYTES } from "./lib/listing.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
@@ -168,12 +169,7 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
   // against what was actually published. No private fields, no credentials.
   // Deliberately carries no timestamp: identical content must produce an
   // identical build, and "when it was assembled" is not what Step 7 verifies.
-  write("build-manifest.json", JSON.stringify({
-    commit: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
-    posts: posts.map((p) => ({
-      slug: p.slug, postId: p.postId ?? null, revisionId: p.revisionId ?? null,
-    })),
-  }, null, 2));
+  write("build-manifest.json", JSON.stringify(buildManifest(posts), null, 2));
 
   write("feed.xml", rss(posts));
   write("sitemap.xml", sitemap(posts, tagPaths));
