@@ -337,8 +337,8 @@ the same engine with new content. Both go through the same build.
 A post written on disk, with its interactive figures or labs, can be pushed
 from a folder instead of attached in the editor. Stage one post per folder
 under `staging/` (gitignored): its `.md` source and one subfolder per
-`::demo[<folder>]` or `::figure[<folder>]` it names. README's *Pushing a post
-with its interactives* describes the layout.
+`::demo[<folder>]` or `::figure[<folder>]` it names. README's *From a folder
+on disk* section describes the layout.
 
 ```bash
 node --env-file=.env scripts/push.mjs staging/<post>            # dry run
@@ -545,7 +545,10 @@ not `chromium-browser`.
 
 CI runs the first group automatically: `.github/workflows/ci.yml` on every push
 and pull request, with the browser checks on `main`, and `audit.yml` weekly for
-production advisories. Neither workflow is given a secret.
+production advisories. Neither workflow is given a secret. The separate
+`cleanup.yml` workflow uses `ACTIONS_CLEANUP_TOKEN` to delete completed GitHub
+Actions runs daily, retaining only the newest of the 1,000 runs it lists across
+this repository; it is operational housekeeping, not a verification job.
 
 The scripts below are **not** in CI, deliberately — scheduling them would mean
 storing an R2 credential in GitHub:
@@ -581,7 +584,7 @@ itself.
 | `/api/…` returns 403 with no obvious cause | The request's `Origin` did not match exactly, or its CSRF token was missing. Origins are matched exactly, never by suffix. |
 | Math shows as raw `$…$` text | The expression failed to parse. KaTeX runs with `throwOnError: false`; check the delimiters, and the preview warnings. |
 | `.tex` heading looks too small | `\section` maps to `<h3>` by `unified-latex` default. Cosmetic; adjust in `lib/latex.mjs` if it matters. |
-| Styles look wrong after a main-site redesign | Re-mirror tokens and chrome — see **Design parity** in [README.md](README.md). |
+| Styles look wrong after a main-site redesign | Re-mirror tokens and chrome from `assets/styles/blog.css` and `lib/templates.mjs`. |
 | An old image is still served after replacing it | Published images are revalidated rather than immutable, but CDN and browser caches still apply. Attachment names are never reused within a post, so a replaced image normally gets a new name. |
 
 ---
