@@ -343,7 +343,7 @@ not `chromium-browser`:
 node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
-node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and screen reader
+node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
 ```
 
 `.github/workflows/ci.yml` runs the suite and a credential-free build on every

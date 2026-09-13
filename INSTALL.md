@@ -513,7 +513,7 @@ recorded, which points at the deployment list.
 node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
-node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and screen reader
+node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
 ```
 
 Those drive Chromium over the DevTools protocol; set `CHROMIUM` if the binary is
