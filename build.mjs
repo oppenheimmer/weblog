@@ -205,6 +205,8 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
   }
   // katex.min.css references url(fonts/...) relative to itself, so fonts live at styles/fonts/.
   write("styles/katex.min.css", fs.readFileSync(katexCss));
+  // The Distill template's <d-math> loads KaTeX from here (assets/vendor/distill.template.v2.js).
+  write("assets/vendor/katex.min.js", fs.readFileSync(path.join(KATEX_DIST, "katex.min.js")));
   copyInto(path.join(KATEX_DIST, "fonts"), "styles/fonts");
 
   // Duration on every build, so the growth §3.3 warns about is visible before it bites.

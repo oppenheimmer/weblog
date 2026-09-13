@@ -4,6 +4,7 @@
   "assets/posts/embeds/fig.css": "1915886ed68788062f4ff5e637184b2fd2b0a8289593fafceb3eba5078e58a2a",
   "assets/posts/embeds/fig.js": "c125b88e17735cc8e4ad2f0a209bf90e4afcd9a65ff4e550af0e8c074ebf9012",
   "assets/vendor/distill.template.v2.js": "3180cccf381f48448fd5b49ba167cdc8749f2f4233de735c3a19ab2656c4f7ca",
+  "assets/vendor/katex.min.js": "a29d2961d3146de5949d78ac7c1a9d93ae54955bad22a6db4fbe836e88e8bf48",
   "build-manifest.json": "dbfd9631f60079d8ee0f4ba157a2ab797118fa321364bbe651bbde271a36fdb0",
   "embeds/index.html": "4a9327f8297c8d9c9a32e57049d971c61df17d620a36f0d290207aee6872a271",
   "favicon.svg": "d8b4bf4566a69ea4e441909b19cfd696baf31290e34f37a4751d0074ee8413a9",

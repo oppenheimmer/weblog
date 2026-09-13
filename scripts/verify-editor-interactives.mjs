@@ -74,8 +74,16 @@ const CHART_DIR = writeFolder(path.join(work, "folders", "chart"), {
     '  try { top.document.title; hit("figure-editor/reached"); } catch { hit("figure-editor/denied"); }\n' +
     '  try { localStorage.getItem("x"); hit("figure-storage/readable"); } catch { hit("figure-storage/denied"); }\n' +
     '  fetch("/api/drafts/", { credentials: "include" }).then((r) => r.text()).then(() => hit("figure-drafts/read"), () => hit("figure-drafts/refused"));\n' +
+    // A Distill component, laid out by the template's own style block, which
+    // Run preview allows by hash as public pages do (lib/distill.mjs).
+    // Its shadow style gives it a padded track, 21 px tall; refused, it
+    // collapses to nothing, whatever width it is given.
+    '  const slider = document.createElement("d-slider");\n' +
+    '  slider.style.width = "200px";\n' +
+    '  root.append(slider);\n' +
+    '  setTimeout(() => hit("figure-distill-slider/" + (slider.getBoundingClientRect().height > 0 ? "sized" : "unsized")), 1500);\n' +
     "}\n",
-  "interactive.json": '{"dependencies": ["d3"]}\n',
+  "interactive.json": '{"dependencies": ["d3", "distill"]}\n',
   "fallback.html": "<p>The chart, standing still.</p>\n",
 });
 
@@ -147,7 +155,7 @@ try {
     await page.until(statusIs("Attached chart and inserted it."));
     const seen = await page.eval(`({ rows: ${ROWS}, body: document.getElementById("body").value })`);
     const chart = seen.rows.find((row) => row.name === "chart");
-    return (chart && /^Figure · 2 files · .* · uses d3 · iv_[0-9a-f]{16}$/.test(chart.meta) &&
+    return (chart && /^Figure · 2 files · .* · uses d3, distill · iv_[0-9a-f]{16}$/.test(chart.meta) &&
       /\n::figure\[i_[0-9a-f]{16}\]\n/.test(seen.body)) || seen;
   });
   await check("beside Publish, the post is said to go out with one figure and one lab", async () =>
@@ -180,6 +188,8 @@ try {
     untilHits(["lab-module/nested", "lab-data/1", "lab-origin/null"]));
   await check("the figure mounts as page code of the previewed article, with d3 loaded from this site", async () =>
     untilHits(["figure-mounted/7.9.0", "figure-article/Orbits"]));
+  await check("a Distill component in it is laid out, as it would be on the post page", async () =>
+    untilHits(["figure-distill-slider/sized"]));
   await check("neither can reach the editor's document or storage, nor read a draft", async () => {
     const settled = await untilHits(["lab-editor/denied", "figure-editor/denied", "figure-storage/denied",
       "lab-drafts/refused", "figure-drafts/refused"]);

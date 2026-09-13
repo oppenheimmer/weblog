@@ -718,8 +718,12 @@
 
   // Copyright 2018 The Distill Template Authors
 
-  const katexJSURL = 'https://distill.pub/third-party/katex/katex.min.js';
-  const katexCSSTag = '<link rel="stylesheet" href="https://distill.pub/third-party/katex/katex.min.css" crossorigin="anonymous">';
+  // weblog: KaTeX from this site rather than distill.pub, whose script and
+  // stylesheet public pages may not load. build.mjs copies katex.min.js to
+  // /assets/vendor/ and katex.min.css, with its fonts, to /styles/. The only
+  // change to the upstream template (CLAUDE.md §3.6).
+  const katexJSURL = '/assets/vendor/katex.min.js';
+  const katexCSSTag = '<link rel="stylesheet" href="/styles/katex.min.css">';
 
   const T = Template('d-math', `
 ${katexCSSTag}

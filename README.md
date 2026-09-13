@@ -201,7 +201,10 @@ Vercel itself sends that permission with every static file, which exposes nothin
 and API responses never receive it. Outside scripts,
 CDNs and data services are not part of either path. A figure may declare a library the engine vendors, and never
 a URL: `distill` (the Distill template's components) or `d3` (D3 7.9.0, the unmodified upstream build, which
-defines the global `d3` before the figure's module is imported). Both are served from `/assets/vendor/`.
+defines the global `d3` before the figure's module is imported). Both are served from `/assets/vendor/`. Distill's
+components render fully: the template loads KaTeX from this site, and the twelve style blocks it injects are
+allowed by hash (`lib/distill.mjs`) on public pages and in Run preview, while every other inline style element stays
+refused.
 
 Both paths publish an immutable folder with a required static HTML fallback. For example:
 
