@@ -21,6 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startPageReader, browserVersion, cannotRun } from "./chromium.mjs";
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { createStore } from "../lib/server/r2.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createUploads } from "../lib/server/uploads.mjs";
@@ -78,7 +79,7 @@ let withSandbox = true;
 
 const files = {
   "/styles/blog.css": path.join(ROOT, "assets", "styles", "blog.css"),
-  "/styles/katex.min.css": path.join(ROOT, "node_modules", "katex", "dist", "katex.min.css"),
+  [`${KATEX_ASSET_ROOT}/katex.min.css`]: path.join(ROOT, "node_modules", "katex", "dist", "katex.min.css"),
   "/assets/blog.js": path.join(ROOT, "assets", "blog.js"),
 };
 const types = { ".css": "text/css", ".js": "text/javascript", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
@@ -96,7 +97,7 @@ const editor = http.createServer((req, res) => {
     return res.end("fetch('/hit/external-script'); try { parent.document.title = 'pwned'; } catch (e) {}");
   }
   const file = files[pathname] ??
-    (pathname.startsWith("/styles/fonts/")
+    (pathname.startsWith(`${KATEX_ASSET_ROOT}/fonts/`)
       ? path.join(ROOT, "node_modules", "katex", "dist", "fonts", path.basename(pathname))
       : null);
   if (file && fs.existsSync(file)) {
@@ -165,8 +166,8 @@ const sandboxed = await load();
 titledOrStop(sandboxed, "sandboxed");
 
 console.log("With the editor's sandbox:");
-check("the preview renders with the site's stylesheets", hit("editor /styles/katex.min.css") && hit("editor /styles/blog.css"));
-check("KaTeX fonts load (font-src 'self')", hitPrefix("editor /styles/fonts/"));
+check("the preview renders with the site's stylesheets", hit(`editor ${KATEX_ASSET_ROOT}/katex.min.css`) && hit("editor /styles/blog.css"));
+check("KaTeX fonts load (font-src 'self')", hitPrefix(`editor ${KATEX_ASSET_ROOT}/fonts/`));
 check("the attachment loads from storage on its signed URL", hitPrefix("storage /signed/"));
 check("inline style attributes apply, which KaTeX layout needs", hit("storage /hit/style-attr.png"));
 check("injected inline script does not run", !hit("editor /hit/inline-script"));

@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { DISTILL_STYLE_HASHES, distillStyleSources } from "../lib/distill.mjs";
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { editorCsp } from "../lib/server/pages.mjs";
 import { headersFor, readRouting } from "../lib/routing.mjs";
 import { ROOT, buildFixtures, cleanup } from "./helpers/build-fixture.mjs";
@@ -59,13 +60,18 @@ test("the vendored Distill template loads KaTeX from this site, and the build sh
   const template = fs.readFileSync(path.join(ROOT, "assets", "vendor", "distill.template.v2.js"), "utf8");
   assert.ok(!template.includes("distill.pub/third-party/katex"), "the template still loads KaTeX from distill.pub");
   assert.match(template, /const katexJSURL = '\/assets\/vendor\/katex\.min\.js';/);
-  assert.match(template, /<link rel="stylesheet" href="\/styles\/katex\.min\.css">/);
+  assert.match(template, /document\.querySelector\('meta\[name="weblog-katex-css"\]'\)/);
 
   const dist = buildFixtures();
   try {
     assert.deepEqual(fs.readFileSync(path.join(dist, "assets", "vendor", "katex.min.js")),
       fs.readFileSync(path.join(ROOT, "node_modules", "katex", "dist", "katex.min.js")));
-    assert.ok(fs.existsSync(path.join(dist, "styles", "katex.min.css")));
+    assert.ok(fs.existsSync(path.join(dist, KATEX_ASSET_ROOT.slice(1), "katex.min.css")));
+    assert.ok(
+      fs.readFileSync(path.join(dist, "embeds", "index.html"), "utf8")
+        .includes(`<meta name="weblog-katex-css" content="${KATEX_ASSET_ROOT}/katex.min.css" />`),
+      "a Distill page without body math does not expose the stylesheet for dynamic <d-math>"
+    );
   } finally {
     cleanup(dist);
   }

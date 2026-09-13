@@ -17,6 +17,7 @@ import { browserVersion, cannotRun, startPageReader } from "./chromium.mjs";
 import { listPage, postPage } from "../lib/templates.mjs";
 import { headersFor, readRouting } from "../lib/routing.mjs";
 import { DISTILL_STYLE_HASHES } from "../lib/distill.mjs";
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { loadPost } from "../lib/content.mjs";
 import { INTERACTIVE_FENCE } from "../lib/interactives.mjs";
 
@@ -216,8 +217,8 @@ const site = http.createServer((req, res) => {
     siteHits.push(pathname);
     return send("text/javascript", fs.readFileSync(path.join(KATEX, "katex.min.js")));
   }
-  if (pathname === "/styles/katex.min.css") return send("text/css", fs.readFileSync(path.join(KATEX, "katex.min.css")));
-  if (pathname.startsWith("/styles/fonts/") && fs.existsSync(path.join(KATEX, "fonts", path.basename(pathname)))) {
+  if (pathname === `${KATEX_ASSET_ROOT}/katex.min.css`) return send("text/css", fs.readFileSync(path.join(KATEX, "katex.min.css")));
+  if (pathname.startsWith(`${KATEX_ASSET_ROOT}/fonts/`) && fs.existsSync(path.join(KATEX, "fonts", path.basename(pathname)))) {
     return send("font/woff2", fs.readFileSync(path.join(KATEX, "fonts", path.basename(pathname))));
   }
   if (pathname === "/lib/distill.mjs") return send("text/javascript", fs.readFileSync(path.join(ENGINE, "lib", "distill.mjs")));

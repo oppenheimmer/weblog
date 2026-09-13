@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startDevTools, browserVersion } from "./chromium.mjs";
 
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { createStore } from "../lib/server/r2.mjs";
 import { createSessionStore } from "../lib/server/sessions.mjs";
 import { createRateLimiter } from "../lib/server/rate-limit.mjs";
@@ -47,7 +48,7 @@ const STATIC = {
   "/assets/vendor/distill.template.v2.js": ["assets/vendor/distill.template.v2.js", "text/javascript"],
   // The build copies KaTeX from node_modules; Distill's <d-math> loads it.
   "/assets/vendor/katex.min.js": ["node_modules/katex/dist/katex.min.js", "text/javascript"],
-  "/styles/katex.min.css": ["node_modules/katex/dist/katex.min.css", "text/css"],
+  [`${KATEX_ASSET_ROOT}/katex.min.css`]: ["node_modules/katex/dist/katex.min.css", "text/css"],
   "/assets/login.js": ["assets/login.js", "text/javascript"],
   "/styles/blog.css": ["assets/styles/blog.css", "text/css"],
   "/styles/editor.css": ["assets/styles/editor.css", "text/css"],
@@ -135,7 +136,11 @@ export async function startEditorHarness({ shots = null, editorScript = (text) =
         const handler = (await import(pathToFileURL(path.join(ROOT, file(match))).href)).default;
         return await handler(req, res);
       }
-      const asset = STATIC[url.pathname];
+      const asset = STATIC[url.pathname] ??
+        (url.pathname.startsWith(`${KATEX_ASSET_ROOT}/fonts/`)
+          ? [path.join("node_modules/katex/dist/fonts", path.basename(url.pathname)),
+            `font/${path.extname(url.pathname).slice(1)}`]
+          : null);
       if (asset && fs.existsSync(path.join(ROOT, asset[0]))) {
         res.writeHead(200, { "content-type": asset[1] });
         const text = fs.readFileSync(path.join(ROOT, asset[0]));

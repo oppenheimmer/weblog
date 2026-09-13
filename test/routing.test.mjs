@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readRouting, headersFor, fileFor, compileSource, RoutingError } from "../lib/routing.mjs";
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { ROOT } from "./helpers/build-fixture.mjs";
 
 const routing = () =>
@@ -36,7 +37,7 @@ test("a wildcard matches a whole subtree and nothing above it", () => {
   assert.ok(!match.test("/xdemos/a"));
   // A literal dot is a dot, not "any character": /images.uploads/ is a
   // different path and must not inherit the uploads rule.
-  assert.ok(!compileSource("/styles/katex.min.css").test("/styles/katexxmin.css"));
+  assert.ok(!compileSource(`${KATEX_ASSET_ROOT}/katex.min.css`).test(`${KATEX_ASSET_ROOT}/katexxmin.css`));
 });
 
 test("a later rule wins on a repeated key, the way the platform resolves them", () => {

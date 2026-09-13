@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildFixtures, cleanup, walk, FIXTURES, ROOT } from "./helpers/build-fixture.mjs";
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { readRouting, headersFor, fileFor } from "../lib/routing.mjs";
 import { toPlainText } from "../lib/markdown.mjs";
 
@@ -258,7 +259,7 @@ test("tripwire: KaTeX stylesheet is gated on real math, not on the word 'katex'"
   try {
     const html = fs.readFileSync(path.join(dist, "prose-about-katex", "index.html"), "utf8");
     assert.ok(
-      !html.includes("/styles/katex.min.css"),
+      !html.includes(`<link rel="stylesheet" href="${KATEX_ASSET_ROOT}/katex.min.css"`),
       "a post that merely mentions katex in prose is loading the KaTeX stylesheet"
     );
   } finally {
@@ -485,6 +486,23 @@ test("tripwire: published uploads are never served as immutable", () => {
 
 const routing = () =>
   readRouting(JSON.parse(fs.readFileSync(path.join(ROOT, "vercel.json"), "utf8")));
+
+test("tripwire: immutable KaTeX assets carry their dependency version", () => {
+  assert.match(KATEX_ASSET_ROOT, /^\/styles\/katex\/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+  const config = routing();
+  for (const asset of [
+    `${KATEX_ASSET_ROOT}/katex.min.css`,
+    `${KATEX_ASSET_ROOT}/fonts/KaTeX_Main-Regular.woff2`,
+  ]) {
+    const cache = headersFor(config, asset).get("cache-control") ?? "";
+    assert.match(cache, /max-age=31536000/, `${asset} is not cached for a year`);
+    assert.match(cache, /immutable/, `${asset} is not immutable`);
+  }
+  for (const old of ["/styles/katex.min.css", "/styles/fonts/KaTeX_Main-Regular.woff2"]) {
+    assert.equal(headersFor(config, old).get("cache-control"), undefined,
+      `${old} still receives the long-lived KaTeX cache policy`);
+  }
+});
 
 test("tripwire: a lab's sandbox arrives with its own response, not only from a frame", () => {
   // §3.6's central claim. A lab payload has a URL of its own, so opened

@@ -7,8 +7,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { KATEX_ASSET_ROOT } from "../lib/katex-assets.mjs";
 import { buildFixtures, cleanup, walk } from "./helpers/build-fixture.mjs";
 
+const KATEX_DIST_ROOT = KATEX_ASSET_ROOT.slice(1);
 const dist = buildFixtures();
 const read = (rel) => fs.readFileSync(path.join(dist, rel), "utf8");
 const files = walk(dist);
@@ -87,11 +89,11 @@ test("canonical URL matches the path the page is emitted at", () => {
 test("required site files are all present", () => {
   for (const rel of [
     "index.html", "404.html", "robots.txt", "sitemap.xml", "feed.xml",
-    "favicon.svg", "styles/blog.css", "styles/katex.min.css", "assets/blog.js",
+    "favicon.svg", "styles/blog.css", `${KATEX_DIST_ROOT}/katex.min.css`, "assets/blog.js",
   ]) {
     assert.ok(files.includes(rel), `missing ${rel}`);
   }
-  assert.ok(files.some((f) => f.startsWith("styles/fonts/")), "KaTeX fonts were not copied");
+  assert.ok(files.some((f) => f.startsWith(`${KATEX_DIST_ROOT}/fonts/`)), "KaTeX fonts were not copied");
 });
 
 test("the sitemap lists every post URL and every tag URL exactly once", () => {
@@ -115,8 +117,9 @@ test("the feed carries one item per published post", () => {
 });
 
 test("KaTeX stylesheet is linked by exactly the posts that need it", () => {
+  const link = `<link rel="stylesheet" href="${KATEX_ASSET_ROOT}/katex.min.css"`;
   for (const { slug, math } of PUBLISHED) {
-    const linked = read(`${slug}/index.html`).includes("/styles/katex.min.css");
+    const linked = read(`${slug}/index.html`).includes(link);
     assert.equal(linked, math, `${slug}: expected KaTeX CSS linked=${math}, got ${linked}`);
   }
 });
@@ -244,7 +247,8 @@ test("a paginated build splits every listing by weight and keeps both views whol
 
         // KaTeX is linked by exactly the pages whose article needs it.
         const post = PUBLISHED.find((p) => p.slug === feedSlugs(html)[0]);
-        assert.equal(html.includes("/styles/katex.min.css"), post.math && post.slug !== "embeds", `${rel}: math gating`);
+        const katexLink = `<link rel="stylesheet" href="${KATEX_ASSET_ROOT}/katex.min.css"`;
+        assert.equal(html.includes(katexLink), post.math && post.slug !== "embeds", `${rel}: math gating`);
       });
       assert.deepEqual(seen, slugs, `${base || "home"}: the feed pages together must show every post once, in order`);
       assert.ok(!pfiles.includes(`${base}page/${slugs.length + 1}/index.html`), "an extra empty page was emitted");

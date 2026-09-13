@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
 import { collectPosts, groupByTag, loadPost, ContentError } from "./lib/content.mjs";
+import { KATEX_ASSET_ROOT } from "./lib/katex-assets.mjs";
 import { ENGINE } from "./lib/sanitize.mjs";
 import { hasR2Config } from "./lib/server/config.mjs";
 import { buildManifest } from "./lib/server/published.mjs";
@@ -202,11 +203,13 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
   if (!fs.existsSync(katexCss)) {
     throw new Error("katex.min.css not found — run `npm install` first.");
   }
-  // katex.min.css references url(fonts/...) relative to itself, so fonts live at styles/fonts/.
-  write("styles/katex.min.css", fs.readFileSync(katexCss));
+  // The version in the public path lets these files remain immutable across upgrades.
+  const katexPublicRoot = KATEX_ASSET_ROOT.slice(1);
+  // katex.min.css references url(fonts/...) relative to itself.
+  write(path.join(katexPublicRoot, "katex.min.css"), fs.readFileSync(katexCss));
   // The Distill template's <d-math> loads KaTeX from here (assets/vendor/distill.template.v2.js).
   write("assets/vendor/katex.min.js", fs.readFileSync(path.join(KATEX_DIST, "katex.min.js")));
-  copyInto(path.join(KATEX_DIST, "fonts"), "styles/fonts");
+  copyInto(path.join(KATEX_DIST, "fonts"), path.join(katexPublicRoot, "fonts"));
 
   // Duration on every build, so the growth §3.3 warns about is visible before it bites.
   console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, distDir)}/ in ${Date.now() - started} ms`);

@@ -720,10 +720,11 @@
 
   // weblog: KaTeX from this site rather than distill.pub, whose script and
   // stylesheet public pages may not load. build.mjs copies katex.min.js to
-  // /assets/vendor/ and katex.min.css, with its fonts, to /styles/. The only
-  // change to the upstream template (CLAUDE.md §3.6).
+  // /assets/vendor/; the page's own link names the versioned CSS and fonts.
+  // The only change to the upstream template (CLAUDE.md §3.6).
   const katexJSURL = '/assets/vendor/katex.min.js';
-  const katexCSSTag = '<link rel="stylesheet" href="/styles/katex.min.css">';
+  const katexCSSURL = document.querySelector('meta[name="weblog-katex-css"]')?.getAttribute('content');
+  const katexCSSTag = katexCSSURL ? `<link rel="stylesheet" href="${katexCSSURL}">` : '';
 
   const T = Template('d-math', `
 ${katexCSSTag}

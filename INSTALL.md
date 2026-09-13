@@ -71,9 +71,10 @@ What `npm run build` does (`build.mjs`, single pass):
      deliberately carries no timestamp.
 6. Copies static assets into `dist/`: `assets/styles/` → `styles/`,
    `assets/vendor/` → `assets/vendor/`, `blog.js`, `editor.js`, `login.js` and
-   `preview-run.js` → `assets/`, `favicon.svg`, and from KaTeX `katex.min.css` →
-   `styles/` with its fonts at `styles/fonts/`, and `katex.min.js` →
-   `assets/vendor/`. Published images arrive from R2 in `images/uploads/`.
+   `preview-run.js` → `assets/`, `favicon.svg`, and from KaTeX `katex.min.css`
+   with its fonts → `styles/katex/<version>/`, and `katex.min.js` →
+   `assets/vendor/`. The versioned styles and fonts can be cached immutably.
+   Published images arrive from R2 in `images/uploads/`.
 
 `dist/` is gitignored and fully regenerated on every build, locally and on Vercel.
 
