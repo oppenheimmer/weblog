@@ -143,7 +143,8 @@ A Markdown post can include two kinds of interactive, each an uploaded folder:
 - **Both** need a `fallback.html`, shown in the feed, in print, without
   JavaScript, and while loading. Neither runs in listings.
 - **Libraries** are named, never linked: a figure may declare `distill` or
-  `d3`, both served from this site. Outside scripts and data are refused.
+  `d3`, both served from this site, and cannot load from other sites. A lab
+  loads what it needs itself, and is not held to the page's policy.
 - **Maths** in the post body is always rendered by KaTeX when the site builds.
   Distill's `<d-math>` is for maths a figure creates or changes as it runs.
 - **Distill stays inside its figure.** The page around it keeps the blog's

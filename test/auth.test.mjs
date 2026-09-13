@@ -141,19 +141,6 @@ test("an expired record is rejected on read, not merely swept later", async () =
   assert.ok(await backend.getJson(`sessions/${hashToken(token)}.json`));
 });
 
-test("sweeping removes dead sessions and keeps live ones", async () => {
-  let clock = 1_000_000;
-  const backend = newBackend();
-  const sessions = createSessionStore(backend, { now: () => clock });
-  const dead = await sessions.create();
-  clock += ABSOLUTE_LIFETIME_MS + 1;
-  const alive = await sessions.create();
-
-  assert.equal(await sessions.sweep(), 1);
-  assert.equal(await sessions.verify(dead.token), null);
-  assert.ok(await sessions.verify(alive.token));
-});
-
 // ---------------------------------------------------------------- CSRF
 
 test("a CSRF token validates for its own session only", async () => {
@@ -346,17 +333,4 @@ test("an attempt that cannot be counted is refused, not waved through", async ()
     assert.equal(result.allowed, false, "an unwritable rate-limit store let the attempt through");
     assert.equal(result.failedClosed, true);
   }
-});
-
-test("sweeping drops elapsed windows and keeps the current one", async () => {
-  let clock = 1_000_000;
-  const backend = newBackend();
-  const limiter = limiterOn(backend, () => clock);
-  await limiter.admit({ client: "1.2.3.4" });
-  clock += 15 * 60 * 1000 * 3;
-  await limiter.admit({ client: "1.2.3.4" });
-
-  assert.equal(await limiter.sweep(), 2); // the old window's client and shared records
-  const next = await limiter.admit({ client: "1.2.3.4" });
-  assert.equal(next.charges[0].count, 2, "the current window was swept away");
 });

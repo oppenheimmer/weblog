@@ -16,9 +16,9 @@ import { listingPages, FEED_PAGE_BYTES } from "./lib/listing.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-// Directory overrides let the test harness build a fixture corpus into a temp
-// tree without touching real content. Unset in normal use -> identical output.
-const POSTS_DIR = process.env.BLOG_POSTS_DIR || path.join(ROOT, "content", "posts");
+// Directory overrides let the test harness, or a local build, read posts and
+// their assets from outside the engine. Unset in normal use.
+const POSTS_DIR = process.env.BLOG_POSTS_DIR;
 const ASSETS_DIR = process.env.BLOG_ASSETS_DIR || path.join(ROOT, "assets");
 const DIST = process.env.BLOG_DIST_DIR || path.join(ROOT, "dist");
 // Same purpose: lets a test paginate a small corpus. Unset in normal use.
@@ -34,10 +34,10 @@ function rmrf(p) {
 }
 
 // Read post sources from disk and hand them to the shared content pipeline.
-// This is the only part of the generator that knows about files at all; the R2
-// reader will sit beside it and produce the same post objects (CLAUDE.md §1.1).
+// This is the only part of the generator that knows about files at all; posts
+// from R2 come through lib/server/published.mjs as the same objects (§1.1).
 function loadPosts(postsDir = POSTS_DIR) {
-  if (!fs.existsSync(postsDir)) return [];
+  if (!postsDir || !fs.existsSync(postsDir)) return [];
   const files = fs
     .readdirSync(postsDir)
     .filter((f) => f.endsWith(".md") || f.endsWith(".tex"))
@@ -63,9 +63,9 @@ function loadPosts(postsDir = POSTS_DIR) {
 /**
  * Where content comes from (CLAUDE.md §1.1).
  *
- * R2 is the source of truth. The filesystem path stays for two reasons: the
- * test harness drives it through BLOG_POSTS_DIR, and a clone of the engine with
- * no credentials should still build something rather than crash.
+ * R2 is the source of truth. BLOG_POSTS_DIR reads a directory instead, for the
+ * test harness and local builds. With neither, a clone of the engine, which
+ * holds no posts, builds an empty site rather than crashing.
  */
 async function readPosts(store) {
   if (process.env.BLOG_POSTS_DIR) {
@@ -82,8 +82,8 @@ async function readPosts(store) {
     console.log("  content: test fixtures (a preview deployment with no R2 credentials)");
     return { posts: loadPosts(path.join(PREVIEW_FIXTURES, "content", "posts")), fixtures: true };
   }
-  console.log("  content: filesystem (no R2 credentials configured)");
-  return { posts: loadPosts() };
+  console.log("  content: none (no R2 credentials configured)");
+  return { posts: [] };
 }
 
 /**
@@ -181,10 +181,12 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
 
   // Static assets
   copyInto(path.join(ASSETS_DIR, "styles"), "styles");
-  // Global media (images, etc.) referenced as /images/… from any post.
+  // Images and embed assets of posts read from a directory, when
+  // BLOG_ASSETS_DIR names one that has them, as the test corpus's does. The
+  // engine's own assets hold neither: published media comes from R2.
   copyInto(path.join(ASSETS_DIR, "images"), "images");
-  // Per-post embed assets and vendored libraries (e.g. distill template).
   copyInto(path.join(ASSETS_DIR, "posts"), "assets/posts");
+  // Vendored libraries: Distill and D3.
   copyInto(path.join(ASSETS_DIR, "vendor"), "assets/vendor");
   // The fixture corpus's own images and embed assets, beside the real engine's.
   if (fixtures) {

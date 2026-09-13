@@ -70,10 +70,10 @@ What `npm run build` does (`build.mjs`, single pass):
      contains. The editor reads it back to decide what is actually live, so it
      deliberately carries no timestamp.
 6. Copies static assets into `dist/`: `assets/styles/` → `styles/`,
-   `assets/images/` → `images/`, `assets/posts/` → `assets/posts/`,
-   `assets/vendor/` → `assets/vendor/`, `blog.js`/`editor.js`/`login.js` →
-   `assets/`, `favicon.svg`, and KaTeX's `katex.min.css` → `styles/` with its
-   fonts at `styles/fonts/`.
+   `assets/vendor/` → `assets/vendor/`, `blog.js`, `editor.js`, `login.js` and
+   `preview-run.js` → `assets/`, `favicon.svg`, and from KaTeX `katex.min.css` →
+   `styles/` with its fonts at `styles/fonts/`, and `katex.min.js` →
+   `assets/vendor/`. Published images arrive from R2 in `images/uploads/`.
 
 `dist/` is gitignored and fully regenerated on every build, locally and on Vercel.
 
@@ -102,7 +102,9 @@ draft: true                   # excluded from the build
 
 These files are treated as repository-authored and trusted, so they may use the
 legacy embed hooks described in [README.md](README.md). Posts published from the
-browser never can.
+browser never can. Their images and embed assets go in `images/` and `posts/` of
+a copy of `assets/` named by `BLOG_ASSETS_DIR`, as the test corpus's do
+(`test/fixtures/assets/`).
 
 ---
 
