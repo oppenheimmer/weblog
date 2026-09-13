@@ -37,7 +37,7 @@ git clone <repo-url> website-blog
 cd website-blog
 npm install        # build dependencies and KaTeX (its CSS and fonts are copied at build)
 npm run build      # generate ./dist
-npm run dev        # the site and the editor together at http://localhost:3000 (README, Local development)
+npm run dev        # the site and the editor together at http://127.0.0.1:3000 (README, Local development)
 npm run clean      # remove ./dist
 npm test           # the full suite; needs no credentials
 ```
@@ -127,7 +127,7 @@ browser never can.
    ```
 
    Add any other origin you will run the editor from — a preview deployment or
-   `http://localhost:3000` for `npm run dev` against R2 — as its own entry.
+   `http://127.0.0.1:3000` for `npm run dev` against R2 — as its own entry.
 4. Add two **object lifecycle rules** (Settings → Object Lifecycle Rules), each
    deleting objects **1 day after upload**:
 

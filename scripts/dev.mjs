@@ -270,9 +270,14 @@ export async function startDevServer({
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  site = `http://localhost:${server.address().port}`;
+  // The address the server actually listens on. `localhost` is not guaranteed
+  // to resolve: in a headless Chromium it failed with ERR_NAME_NOT_RESOLVED
+  // while this server was up, so it is only accepted as a second origin for a
+  // browser where it does resolve.
+  site = `http://127.0.0.1:${server.address().port}`;
   // The origin allowlist, canonical URLs and the "On the site" check all read it.
   process.env.SITE_URL = site;
+  process.env.EDITOR_ORIGIN = `http://localhost:${server.address().port}`;
   await rebuild();
 
   return {

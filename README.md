@@ -332,7 +332,7 @@ layout, while the post's own linked JavaScript supplies its animation.
 ```bash
 npm install        # one time: build dependencies and KaTeX (CSS and fonts)
 npm run build      # generate ./dist
-npm run dev        # the site and the editor together at http://localhost:3000
+npm run dev        # the site and the editor together at http://127.0.0.1:3000
 npm run clean      # remove ./dist
 npm test           # the full suite; needs no credentials
 npm run test:bless # re-record golden output after an intended change
@@ -348,7 +348,7 @@ hook, it rebuilds locally, so a post published at `/editor/` appears on the
 local site and "On the site" follows it. With R2 credentials in `.env` it uses
 that bucket under `R2_PREFIX` (`dev` unless set; `prod` is refused without
 `--allow-prod`), and uploads need the R2 CORS rule to allow
-`http://localhost:3000`. Without credentials, or with `--memory`, it uses an
+`http://127.0.0.1:3000`. `http://localhost:3000` works too where it resolves. Without credentials, or with `--memory`, it uses an
 in-memory bucket that forgets everything on exit. The password is
 `ADMIN_PASSWORD_HASH`'s when set, otherwise one it prints. Other flags:
 `--port`. Restart it after changing engine code.
