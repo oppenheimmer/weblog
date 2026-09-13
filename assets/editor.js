@@ -46,8 +46,10 @@ const state = {
     autosave: { timer: null },
     attachments: [],
     attachmentAlts: new Map(),
-    // The newest revision of each interactive, which is what a post publishes.
+    // The newest revision of each interactive, which is what a post publishes,
+    // and each one's stored revisions, most recently in use first.
     interactives: [],
+    interactiveRevisions: new Map(),
     // What the folder picker was opened for: a kind, and the interactive a
     // Replace names, if it was Replace.
     interactivePick: null,
@@ -829,6 +831,9 @@ const BUNDLE_CONFIG_FIELDS = ["kind", "entry", "fallback", "dependencies"];
 const DEFAULT_ENTRY = { demo: "index.html", figure: "main.mjs" };
 const DEFAULT_FALLBACK = "fallback.html";
 const BUNDLE_PUT_PARALLELISM = 4;
+// What the editor offers to put back: the revision in use and the two before
+// it, which is also what storage keeps (RETENTION.interactiveRevisions).
+const REVISIONS_OFFERED = 3;
 
 const setInteractiveStatus = (text) => writeText(els.interactiveStatus, text);
 
@@ -843,15 +848,31 @@ const interactiveReference = (record) => `\n::${record.kind}[${record.id}]\n`;
 
 async function loadInteractives() {
     state.interactives = [];
+    state.interactiveRevisions = new Map();
     if (state.postId) {
         const { data } = await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}&kind=interactive`);
-        // Every stored revision comes back, oldest first. Keeping the last of
-        // each id keeps the one publishing takes.
+        // Every stored revision comes back, least recently in use first.
+        // Keeping the last of each id keeps the one publishing takes.
         const newest = new Map();
-        for (const record of data.interactives ?? []) newest.set(record.id, record);
+        for (const record of data.interactives ?? []) {
+            newest.set(record.id, record);
+            if (!state.interactiveRevisions.has(record.id)) state.interactiveRevisions.set(record.id, []);
+            state.interactiveRevisions.get(record.id).unshift(record);
+        }
         state.interactives = [...newest.values()];
     }
     renderInteractives();
+}
+
+/** Put an earlier stored revision back as the one the post publishes. */
+async function useRevision(record, revisionId) {
+    if (!revisionId || revisionId === record.revisionId) return;
+    await api("/api/uploads/", {
+        method: "POST",
+        body: { action: "promote-bundle", postId: state.postId, interactiveId: record.id, revisionId },
+    });
+    await loadInteractives();
+    setInteractiveStatus(`${record.name} now uses revision ${revisionId}. Publish to put it on the site.`);
 }
 
 function renderInteractives() {
@@ -884,6 +905,28 @@ function renderInteractives() {
             el.addEventListener("click", onClick);
             return el;
         };
+        // Earlier revisions, when there are any, with the one in use first.
+        const revisions = (state.interactiveRevisions.get(record.id) ?? []).slice(0, REVISIONS_OFFERED);
+        let chooser = null;
+        if (revisions.length > 1) {
+            chooser = document.createElement("span");
+            chooser.className = "interactive-revision";
+            const select = document.createElement("select");
+            select.setAttribute("aria-label", `Revision of ${record.name}`);
+            select.append(...revisions.map((revision, position) => {
+                const option = document.createElement("option");
+                option.value = revision.revisionId;
+                option.textContent = `${revision.revisionId} · ${formatWhen(revision.promotedAt ?? revision.createdAt)}` +
+                    (position === 0 ? " (in use)" : "");
+                return option;
+            }));
+            const use = button("Use", `Use the chosen revision of ${record.name}`, "button-secondary",
+                guard(() => useRevision(record, select.value)));
+            use.hidden = true;
+            select.addEventListener("change", () => { use.hidden = select.value === record.revisionId; });
+            chooser.append(select, use);
+        }
+
         actions.append(
             button("Insert", `Insert ${record.name}`, "button-secondary", () => {
                 insertOnOwnLine(interactiveReference(record));
@@ -893,7 +936,7 @@ function renderInteractives() {
                 guard(() => pickFolder(record.kind, record))),
             button("Remove", `Remove ${record.name}`, "button-danger", guard(() => removeInteractive(record))),
         );
-        li.append(name, meta, actions);
+        li.append(name, meta, ...(chooser ? [chooser] : []), actions);
         return li;
     }));
     els.previewRun.hidden = state.interactives.length === 0;
@@ -987,7 +1030,7 @@ async function uploadBundle(folder, interactiveId) {
         method: "POST",
         body: { action: "begin-bundle", postId: state.postId, manifest: folder.manifest, ...(interactiveId ? { interactiveId } : {}) },
     });
-    if (agreed.unchanged) return { record: agreed.record, unchanged: true };
+    if (agreed.unchanged) return { record: agreed.record, unchanged: true, promoted: Boolean(agreed.promoted) };
 
     const queue = [...agreed.uploads];
     let sent = 0;
@@ -1010,7 +1053,7 @@ async function uploadBundle(folder, interactiveId) {
     const { data } = await api("/api/uploads/", {
         method: "POST", body: { action: "complete-bundle", postId: state.postId, uploadId: agreed.uploadId },
     });
-    return { record: data.interactive, unchanged: false };
+    return { record: data.interactive, unchanged: false, promoted: false };
 }
 
 async function attachFolder(picked) {
@@ -1040,20 +1083,17 @@ async function attachFolder(picked) {
         }
         if (replace) folder.manifest.name = replace.name;
 
-        const { record, unchanged } = await uploadBundle(folder, replace?.id);
+        const { record, unchanged, promoted } = await uploadBundle(folder, replace?.id);
         await loadInteractives();
         let note;
         if (replace) {
-            // An unchanged folder is either the revision already newest, or an
-            // older one stored before it. Publishing takes the newest, so the
-            // second leaves the post as it was, and saying "unchanged" would
-            // hide that (§4.2: a reference names an interactive, not a revision).
+            // An unchanged folder is either the revision already in use, or an
+            // earlier one still stored, which the server puts back.
             note = !unchanged
                 ? `Replaced ${record.name} with a new revision.`
-                : record.revisionId === replace.revisionId
-                    ? `${record.name} is unchanged: that folder is the revision already attached.`
-                    : `That folder is an earlier revision of ${record.name}. The post keeps the newer one, ` +
-                      "because publishing takes the newest; change any file to attach it as new.";
+                : promoted
+                    ? `Put ${record.name} back to its earlier revision ${record.revisionId}.`
+                    : `${record.name} is unchanged: that folder is the revision already attached.`;
         } else {
             // A body written for the staging push names the folder, and the
             // push writes the id in its place. So does this.
@@ -1547,6 +1587,14 @@ els.publish.addEventListener("click", guard(async () => {
         const { data } = await api("/api/publish/", {
             method: "POST", body: { postId: state.postId },
         });
+        // A changed bundle with unchanged words is published as a new draft
+        // revision the server saved, so this tab saves against that from now on.
+        if (data.draft) {
+            state.etag = data.etag;
+            state.version = data.draft.version;
+            state.saved = readForm();
+            await refreshList();
+        }
         setStatus(`published · v${state.version}`);
         // Published is not live: the panel below says when the site shows it.
         writeText(els.publishedNote, data.job?.hookError

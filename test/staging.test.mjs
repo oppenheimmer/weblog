@@ -531,21 +531,76 @@ test("a source pushed alone uses the interactives its post already has", async (
   assert.equal(published.interactives.length, 2);
 });
 
-test("an older revision of a folder is refused, because the site would keep the newer one", async (t) => {
+test("an earlier revision of a folder is put back, and the site publishes it", async (t) => {
   const h = await harness(t);
   const { dir } = stage(t);
-  await push(h, dir);
-  const changed = { ...LAB, "demo.mjs": "export const run = 2;\n" };
-  writeTree(dir, { "post.md": SOURCE });
-  writeTree(path.join(dir, "double-pendulum"), changed);
-  await push(h, dir);
+  const first = await push(h, dir);
+  const labId = (await h.interactives.list(first.postId)).find((record) => record.kind === "demo").id;
+  const original = (await h.interactives.get(first.postId, labId)).revisionId;
 
-  // Back to the first version: stored already, and not the newest.
+  writeTree(dir, { "post.md": SOURCE });
+  writeTree(path.join(dir, "double-pendulum"), { ...LAB, "demo.mjs": "export const run = 2;\n" });
+  writeTree(path.join(dir, "energy"), FIGURE);
+  await push(h, dir);
+  assert.notEqual((await h.interactives.get(first.postId, labId)).revisionId, original);
+
+  // Back to the first version: already stored, so nothing moves but the order.
   writeTree(dir, { "post.md": SOURCE });
   writeTree(path.join(dir, "double-pendulum"), LAB);
-  const writes = h.writes.length;
-  await refusal(() => push(h, dir), "older_revision");
-  assert.equal(h.writes.length, writes);
+  writeTree(path.join(dir, "energy"), FIGURE);
+  const plan = await h.pusher.plan(readStagedPost(dir));
+  assert.equal(plan.bundles.find((bundle) => bundle.folder === "double-pendulum").action, "promote");
+  const puts = h.puts.length;
+  const third = await push(h, dir);
+
+  assert.equal(third.complete, true, JSON.stringify(third.kept));
+  assert.equal(h.puts.length, puts, "an earlier revision was transferred again");
+  assert.equal((await h.interactives.get(first.postId, labId)).revisionId, original);
+  const [published] = await loadPublishedPosts({ store: h.store });
+  assert.equal(published.interactives.find((item) => item.id === labId).revisionId, original,
+    "the site kept the newer revision");
+});
+
+test("an interactive the source stops naming is removed once the post is published", async (t) => {
+  const h = await harness(t);
+  const { dir } = stage(t);
+  const first = await push(h, dir);
+  const energy = (await h.interactives.list(first.postId)).find((record) => record.kind === "figure");
+
+  const withoutFigure = SOURCE.replace(/\nThe energy stays put[\s\S]*$/, "\n");
+  assert.ok(!withoutFigure.includes("::figure"), "the fixture still names the figure");
+  writeTree(dir, { "post.md": withoutFigure });
+  writeTree(path.join(dir, "double-pendulum"), LAB);
+  const plan = await h.pusher.plan(readStagedPost(dir));
+  assert.deepEqual(plan.removals, [{ id: energy.id, kind: "figure", name: energy.name }]);
+
+  const second = await push(h, dir);
+  assert.equal(second.complete, true, JSON.stringify(second.kept));
+  assert.deepEqual(second.removedInteractives.map(({ id }) => id), [energy.id]);
+  assert.deepEqual((await h.interactives.list(first.postId)).filter((record) => record.id === energy.id), [],
+    "the figure's stored revisions stayed");
+  const [published] = await loadPublishedPosts({ store: h.store });
+  assert.deepEqual(published.interactives.map((item) => item.kind), ["demo"]);
+  // A rollback to the revision that used it still has what it serves, and the
+  // name is never given to different bytes.
+  assert.ok((await h.store.listAll(`published/interactives/${first.postId}/${energy.id}/`)).length > 0,
+    "the published copy a rollback serves was removed");
+  assert.ok(await h.store.get(keys.interactiveName(first.postId, energy.name)), "the name claim was removed");
+});
+
+test("a push refused at publication removes no interactive", async (t) => {
+  const h = await harness(t);
+  const { dir } = stage(t);
+  const first = await push(h, dir);
+  const before = (await h.interactives.list(first.postId)).length;
+
+  // Stops the figure being named, and names an image this post does not have,
+  // which publishing refuses after the draft is saved.
+  const refused = SOURCE.replace(/\nThe energy stays put[\s\S]*$/, "\n![gone](attachment://a_0000000000000000)\n");
+  writeTree(dir, { "post.md": refused });
+  writeTree(path.join(dir, "double-pendulum"), LAB);
+  await assert.rejects(() => push(h, dir), (err) => err.code === "unknown_attachment");
+  assert.equal((await h.interactives.list(first.postId)).length, before, "a refused push removed an interactive");
 });
 
 test("a folder name the post does not have is refused", async (t) => {

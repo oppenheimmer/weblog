@@ -7,6 +7,7 @@
 //   POST   /api/uploads/  { action: "complete", postId, uploadId }
 //   POST   /api/uploads/  { action: "begin-bundle", postId, manifest, interactiveId? }
 //   POST   /api/uploads/  { action: "complete-bundle", postId, uploadId }
+//   POST   /api/uploads/  { action: "promote-bundle", postId, interactiveId, revisionId }
 //   DELETE /api/uploads/?postId=<id>&attachmentId=<id>    remove from the draft
 //   DELETE /api/uploads/?postId=<id>&interactiveId=<id>   remove a bundle
 //
@@ -67,6 +68,10 @@ export default route(async ({ req, res, requestId, store, annotate, signPut }) =
       const interactive = await interactives.complete(body);
       annotate({ interactiveId: interactive.id, bundleRevisionId: interactive.revisionId });
       return sendJson(res, 200, { interactive });
+    }
+    if (body?.action === "promote-bundle") {
+      annotate({ interactiveId: body.interactiveId, bundleRevisionId: body.revisionId });
+      return sendJson(res, 200, { interactive: await interactives.promote(body) });
     }
     return sendError(res, 400, "unknown_action", "Say whether to sign or complete an upload.", { requestId });
   } catch (err) {

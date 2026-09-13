@@ -296,8 +296,8 @@ There is no repository step and no terminal step.
    dropping them on the page. Each attachment's reference is inserted on a line
    of its own. Image alt text is editable before Insert, and a missing reference
    can be relinked to a verified attachment of the same kind. **Interactives**
-   attaches a lab or figure folder, and replaces or removes one (README,
-   *Interactive posts*).
+   attaches a lab or figure folder, replaces or removes one, and puts one of
+   its last three revisions back (README, *Interactive posts*).
 3. **Preview** renders the fields as they would publish, in a sandboxed frame.
    Its errors are exactly what publishing would refuse; render warnings — an
    unsupported LaTeX command, a formula that did not parse — never block
@@ -354,9 +354,10 @@ anything is staged, `npm test` fails its engine-purity tripwire on purpose.
   pass `--replace-draft`; the replaced revisions stay in the draft's history.
 - **Several drafts share the address.** Pass `--post <postId>`.
 
-Two limits: a folder cannot be pushed back to an earlier revision than the post
-already has, and a push never removes an interactive; **Remove** in the editor
-does.
+A folder whose bytes match an earlier stored revision puts that revision back.
+An interactive the post has and the source no longer names is removed after the
+post publishes; the dry run lists it as `remove`, and a push that stops before
+publishing removes nothing.
 
 ---
 
@@ -376,10 +377,9 @@ every key, is dry by default, and never touches the current published revision,
 the current draft, or anything younger than an hour. Retention: superseded
 published revisions 90 days (the rollback window), draft history 30 days or 20
 revisions per post, unattached uploads 24 hours, publication jobs 30 days once
-the index no longer names their revision. A superseded interactive bundle
-revision goes 30 days after it was stored once nothing needs it — it is not
-what its interactive resolves to, and no stored published revision names it —
-and a published bundle copy goes a day after the last revision naming it; if
+the index no longer names their revision, or an hour once their post is gone.
+An interactive keeps its three most recently used bundle revisions, and a
+published bundle copy goes a day after the last stored revision naming it; if
 any of those facts cannot be read, no bundle of that post is touched. It runs
 automatically after publish, unpublish, rollback, draft discard and Rebuild
 site, and never throws.

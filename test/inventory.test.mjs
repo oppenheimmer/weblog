@@ -265,7 +265,7 @@ async function labPost(h) {
     await publisher.publish(saved.draft);
     return saved.draft;
   };
-  return { postId, upload, publishWith, publisher, interactiveId: () => interactiveId };
+  return { postId, upload, publishWith, publisher, interactives, interactiveId: () => interactiveId };
 }
 
 const bundleObjects = async (store, postId, revisionId) => [
@@ -273,58 +273,82 @@ const bundleObjects = async (store, postId, revisionId) => [
   ...await store.listAll(`published/interactives/${postId}/`),
 ].map((o) => o.key).filter((key) => key.includes(`/${revisionId}/`));
 
-test("a superseded bundle revision is kept while a stored published revision names it", async () => {
+test("an interactive keeps its three most recent revisions, however old", async () => {
   const h = harness();
   const lab = await labPost(h);
   const v1 = await lab.upload("export const v = 1;\n");
-  await lab.publishWith(`::demo[${v1.id}]`);
-  const v2 = await lab.upload("export const v = 2;\n");
-  await lab.publishWith(`::demo[${v1.id}]\n\nNew words.`);
-  backdate(h.client, "", 60 * DAY); // past the private window, inside the rollback window
+  await lab.upload("export const v = 2;\n");
+  const v3 = await lab.upload("export const v = 3;\n");
+  backdate(h.client, "", 400 * DAY);
 
-  const before = await bundleObjects(h.store, lab.postId, v1.revisionId);
-  assert.ok(before.length >= 4, "the first revision was never stored, so nothing was tested");
   await collectGarbage(h.store, { apply: true });
-  assert.deepEqual(await bundleObjects(h.store, lab.postId, v1.revisionId), before,
-    "a bundle revision a stored published revision names was collected");
-  assert.ok((await bundleObjects(h.store, lab.postId, v2.revisionId)).length >= 4);
+  for (const revision of [v1, v3]) {
+    assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, revision.id, revision.revisionId)),
+      `revision ${revision.revisionId} of three was collected`);
+  }
 });
 
-test("once nothing names it, a superseded bundle revision goes, and the live post still builds", async () => {
+test("a fourth revision pushes the least recently current out, and the live post still builds", async () => {
   const h = harness();
   const lab = await labPost(h);
   const v1 = await lab.upload("export const v = 1;\n");
   const first = await lab.publishWith(`::demo[${v1.id}]`);
-  const v2 = await lab.upload("export const v = 2;\n");
+  await lab.upload("export const v = 2;\n");
+  await lab.upload("export const v = 3;\n");
+  const v4 = await lab.upload("export const v = 4;\n");
   await lab.publishWith(`::demo[${v1.id}]\n\nNew words.`);
-  backdate(h.client, "", 100 * DAY); // the first published revision leaves its rollback window
+  backdate(h.client, "", 2 * RETENTION.minAgeMs);
 
-  await collectGarbage(h.store, { apply: true }); // collects that revision
-  assert.ok(!(await h.store.get(keys.publishedRevision(lab.postId, first.revisionId))), "the old revision stayed");
-  const swept = await collectGarbage(h.store, { apply: true }); // now nothing names v1
-
-  assert.deepEqual(await bundleObjects(h.store, lab.postId, v1.revisionId), []);
+  const before = await bundleObjects(h.store, lab.postId, v1.revisionId);
+  assert.ok(before.some((key) => key.startsWith("interactives/")), "the first revision was never stored, so nothing was tested");
+  const swept = await collectGarbage(h.store, { apply: true });
   const v1Keys = swept.keys.filter((key) => key.includes(v1.revisionId));
-  assert.match(v1Keys.find((key) => key.startsWith("interactives/")), /manifest\.json$/,
-    "files were deleted before the manifest that commits them");
-  assert.ok((await bundleObjects(h.store, lab.postId, v2.revisionId)).length >= 7, "the live revision lost files");
-  assert.ok(await h.store.get(keys.interactiveName(lab.postId, "orbit")), "the name claim was collected");
+  assert.match(v1Keys[0] ?? "", /manifest\.json$/, "files were deleted before the manifest that commits them");
+  assert.ok(!(await h.store.get(keys.interactiveManifest(lab.postId, v1.id, v1.revisionId))), "a fourth revision was kept");
+  // Its published copy stays while a stored published revision names it, for
+  // a rollback, which publishes from that copy.
+  assert.ok((await bundleObjects(h.store, lab.postId, v1.revisionId)).every((key) => key.startsWith("published/")));
+  assert.ok((await bundleObjects(h.store, lab.postId, v1.revisionId)).length > 0, "a named published copy was collected");
+  await h.publisher.rollback(lab.postId, first.revisionId);
+  assert.equal((await loadPublishedPosts({ store: h.store }))[0].interactives[0].revisionId, v1.revisionId);
 
+  // Once the published revision naming it leaves its window, the copy goes.
+  backdate(h.client, "", 100 * DAY);
+  await h.publisher.rollback(lab.postId, (await h.publisher.listPublications())[0].revisions[0].revisionId);
+  backdate(h.client, "", 100 * DAY);
+  await collectGarbage(h.store, { apply: true }); // the old published revision goes
+  await collectGarbage(h.store, { apply: true }); // then nothing names v1's copy
+  assert.deepEqual(await bundleObjects(h.store, lab.postId, v1.revisionId), [], "an unnamed published copy stayed");
+  assert.ok(await h.store.get(keys.interactiveName(lab.postId, "orbit")), "the name claim was collected");
   const posts = await loadPublishedPosts({ store: h.store });
-  assert.equal(posts[0].interactives[0].revisionId, v2.revisionId);
+  assert.equal(posts[0].interactives[0].revisionId, v4.revisionId, "the live post lost its bundle");
 });
 
-test("a superseded bundle revision inside its window, or the newest one, is kept", async () => {
+test("putting a revision back makes it recent, so newer uploads push others out first", async () => {
   const h = harness();
   const lab = await labPost(h);
   const v1 = await lab.upload("export const v = 1;\n");
   const v2 = await lab.upload("export const v = 2;\n");
-  backdate(h.client, v1.revisionId, 20 * DAY);
-  backdate(h.client, v2.revisionId, 400 * DAY);
+  await lab.upload("export const v = 3;\n");
+  await lab.interactives.promote({ postId: lab.postId, interactiveId: v1.id, revisionId: v1.revisionId });
+  await lab.upload("export const v = 4;\n");
+  backdate(h.client, "", 2 * RETENTION.minAgeMs);
 
   await collectGarbage(h.store, { apply: true });
-  assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, v1.id, v1.revisionId)), "collected inside its window");
-  assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, v2.id, v2.revisionId)), "the newest revision was collected");
+  assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, v1.id, v1.revisionId)), "a revision put back was collected");
+  assert.ok(!(await h.store.get(keys.interactiveManifest(lab.postId, v2.id, v2.revisionId))),
+    "the least recently current revision was kept");
+});
+
+test("no revision is collected inside the age floor, even a fourth", async () => {
+  const h = harness();
+  const lab = await labPost(h);
+  const v1 = await lab.upload("export const v = 1;\n");
+  for (const n of [2, 3, 4]) await lab.upload(`export const v = ${n};\n`);
+  backdate(h.client, "", RETENTION.minAgeMs / 2);
+
+  await collectGarbage(h.store, { apply: true });
+  assert.ok(await h.store.get(keys.interactiveManifest(lab.postId, v1.id, v1.revisionId)), "collected inside the age floor");
 });
 
 test("a stored revision that vanishes between listing and reading keeps every published bundle copy", async () => {

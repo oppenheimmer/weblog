@@ -225,6 +225,12 @@ inserted on its own line, or, when the body already names the folder (`::demo[do
 place of that name. Each row offers **Insert**, **Replace** (a new revision under the same public name) and
 **Remove**. Interactives are for Markdown posts; a LaTeX post cannot name one yet.
 
+An interactive keeps its last three revisions. Once it has more than one, its row lists them with the one in use
+first; choose an earlier one and **Use** puts it back. Replacing with a folder whose bytes match a stored revision
+does the same, transferring nothing. The change reaches the site at the next **Publish**, which saves a new draft
+revision when only a bundle changed, so the site's status follows it. A fourth revision pushes out the least
+recently used one; its published copy stays while a stored published revision still names it, for rollback.
+
 The ordinary preview stays script-free, and shows each interactive's fallback. **Run interactives**, in the
 preview, runs them: labs in their production sandbox, and figures as page code of the previewed article. The
 preview frame then has scripts but still no origin of its own, so neither can reach the editor, its storage or
@@ -269,7 +275,10 @@ It refuses before writing anything when a file would be left behind, a path is a
 beyond title, date, slug, description, tags and format, or a folder breaks the bundle contract. A push that fails
 deletes nothing; a file changed during the push keeps its folder and the source; running the push again resumes.
 Pushing to an address that already has a post updates that post, reusing interactives by name, and refuses to
-replace a draft with unpublished editor changes unless given `--replace-draft`.
+replace a draft with unpublished editor changes unless given `--replace-draft`. A folder matching an earlier
+stored revision puts that revision back. An interactive the post has and the source no longer names is removed,
+once the post is published: its stored revisions go, while its published copies stay for rollback and its name is
+never reused. The dry run lists these as `remove`.
 
 ### Feed and table
 

@@ -99,6 +99,7 @@ const DRAFT = {
 const BUNDLE = {
   upload: (b) => `upload ${b.files} file(s), ${kb(b.bytes)}`,
   stored: () => "already stored; nothing to transfer",
+  promote: (b) => `an earlier revision already stored; put ${b.revisionId} back`,
   reuse: (b) => `not staged; use the post's ${b.name}`,
   finish: () => "remainder of an earlier push; confirm and remove",
 };
@@ -108,6 +109,9 @@ console.log(`Post     ${plan.postId ?? "new"}${plan.live ? `, on the site as ${p
 console.log(`Draft    ${DRAFT[plan.draft]}`);
 for (const bundle of plan.bundles) {
   console.log(`${bundle.kind.padEnd(8)} ${bundle.folder}/ — ${BUNDLE[bundle.action](bundle)}`);
+}
+for (const removal of plan.removals ?? []) {
+  console.log(`${"remove".padEnd(8)} ${removal.kind === "demo" ? "lab" : "figure"} ${removal.name} — the source no longer names it`);
 }
 console.log("Publish  then confirm every staged file against R2 and remove it\n");
 
@@ -127,6 +131,9 @@ try {
 
 console.log(`\nPublished ${result.postId} at /${result.slug}/ as ${result.revisionId}.`);
 console.log(`Removed ${result.removed.length} staged file(s) and ${result.removedDirs.length} folder(s).`);
+if (result.removedInteractives.length) {
+  console.log(`Removed ${result.removedInteractives.length} interactive(s) the source no longer names.`);
+}
 if (result.kept.length) {
   console.log(`\nKept ${result.kept.length} file(s), each unconfirmed:`);
   for (const { path: file, reason } of result.kept) console.log(`  ${rel(file)} — ${reason}`);

@@ -145,6 +145,118 @@ test("a lab with a newer revision publishes that revision and only that one", as
   fs.rmSync(dist, { recursive: true, force: true });
 });
 
+/** Upload changed bytes as a new revision of an existing interactive. */
+async function replaceWith(h, postId, interactiveId, files) {
+  const agreed = await h.interactives.begin({ postId, manifest: manifest(files), interactiveId });
+  for (const [name, body] of Object.entries(files)) {
+    await h.store.put(keys.upload(postId, agreed.uploadId, `files/${name}`), Buffer.from(body));
+  }
+  return h.interactives.complete({ postId, uploadId: agreed.uploadId });
+}
+
+test("an earlier revision put back is what publication takes", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const first = await attach(h, post.postId);
+  const second = await replaceWith(h, post.postId, first.id, { ...FILES, "demo.mjs": "export const ready = 2;\n" });
+  assert.equal((await h.interactives.get(post.postId, first.id)).revisionId, second.revisionId);
+
+  const back = await h.interactives.promote({ postId: post.postId, interactiveId: first.id, revisionId: first.revisionId });
+  assert.equal(back.revisionId, first.revisionId);
+  assert.ok(back.promotedAt, "a revision put back records when");
+  assert.equal((await h.interactives.get(post.postId, first.id)).revisionId, first.revisionId);
+
+  await h.publisher.publish(await saveBody(h, post, `::demo[${first.id}]`));
+  const revision = await storedRevision(h, post.postId);
+  assert.deepEqual(revision.interactives.map((i) => i.revisionId), [first.revisionId]);
+});
+
+test("sending an earlier folder again puts it back, and transfers nothing", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const first = await attach(h, post.postId);
+  await replaceWith(h, post.postId, first.id, { ...FILES, "demo.mjs": "export const ready = 2;\n" });
+
+  const again = await h.interactives.begin({ postId: post.postId, manifest: manifest(), interactiveId: first.id });
+  assert.deepEqual([again.unchanged, again.promoted, again.uploads.length], [true, true, 0]);
+  assert.equal((await h.interactives.get(post.postId, first.id)).revisionId, first.revisionId);
+
+  const same = await h.interactives.begin({ postId: post.postId, manifest: manifest(), interactiveId: first.id });
+  assert.deepEqual([same.unchanged, same.promoted], [true, false], "the revision in use was promoted again");
+});
+
+test("only a stored revision of this post's interactive can be put back", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const other = await newPost(h, "other");
+  const mine = await attach(h, post.postId);
+  const theirs = await attach(h, other.postId);
+  const refused = (input) => h.interactives.promote(input).then(() => null, (err) => err);
+
+  assert.equal((await refused({ postId: post.postId, interactiveId: mine.id, revisionId: "iv_0000000000000000" }))?.code, "not_found");
+  assert.equal((await refused({ postId: post.postId, interactiveId: theirs.id, revisionId: theirs.revisionId }))?.code, "not_found");
+  assert.equal((await refused({ postId: post.postId, interactiveId: "../x", revisionId: mine.revisionId }))?.code, "invalid_interactive");
+  assert.equal((await refused({ postId: post.postId, interactiveId: mine.id, revisionId: "latest" }))?.code, "invalid_revision");
+  // A manifest that is not a verified bundle is not something to put back.
+  const unverified = "iv_00000000000000ab";
+  await h.store.putJson(keys.interactiveManifest(post.postId, mine.id, unverified), { ...mine, revisionId: unverified, status: "withdrawn" });
+  assert.equal((await refused({ postId: post.postId, interactiveId: mine.id, revisionId: unverified }))?.code, "not_found");
+});
+
+test("a published draft revision whose bundles changed since is said to need a revision of its own", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const first = await attach(h, post.postId);
+  const draft = await saveBody(h, post, `::demo[${first.id}]`);
+  assert.equal(await h.publisher.bundlesChangedSince(draft), false, "a revision never published has nothing to differ from");
+  await h.publisher.publish(draft);
+  assert.equal(await h.publisher.bundlesChangedSince(draft), false);
+
+  await replaceWith(h, post.postId, first.id, { ...FILES, "demo.mjs": "export const ready = 2;\n" });
+  assert.equal(await h.publisher.bundlesChangedSince(draft), true);
+  await h.interactives.promote({ postId: post.postId, interactiveId: first.id, revisionId: first.revisionId });
+  assert.equal(await h.publisher.bundlesChangedSince(draft), false, "put back to what went out, nothing changed");
+});
+
+test("Publish, with the words unchanged and a bundle replaced, saves a draft revision and publishes it", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const first = await attach(h, post.postId);
+  const draft = await saveBody(h, post, `::demo[${first.id}]`);
+  const { createSessionStore, csrfToken } = await import("../lib/server/sessions.mjs");
+  const { createRateLimiter } = await import("../lib/server/rate-limit.mjs");
+  const { setContext, cookieName } = await import("../lib/server/http.mjs");
+  const publishRoute = (await import("../api/publish.js")).default;
+  const sessions = createSessionStore(h.store, { authVersion: 1 });
+  setContext({ store: h.store, sessions, limiter: createRateLimiter(h.store, { secret: "t" }), log: () => {},
+    fireDeployHook: async () => ({}), housekeep: async () => ({ ok: true, swept: { deleted: 0, bytesFreed: 0 } }) });
+  process.env.SITE_URL = "https://blog.example";
+  const call = async () => {
+    const { token, session } = await sessions.create();
+    const res = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k] = v; }, getHeader(k) { return this.headers[k]; },
+      status(code) { this.statusCode = code; return this; }, end(chunk) { this.body = chunk; } };
+    await publishRoute({ method: "POST", url: "/api/publish/", body: { postId: post.postId }, headers: {
+      cookie: `${cookieName()}=${token}`, origin: "https://blog.example", "x-csrf-token": csrfToken(session),
+      "content-type": "application/json" } }, res);
+    return { status: res.statusCode, json: JSON.parse(res.body) };
+  };
+
+  const once = await call();
+  assert.equal(once.status, 200);
+  assert.equal(once.json.draft, undefined, "an unchanged post saved a revision it did not need");
+
+  const second = await replaceWith(h, post.postId, first.id, { ...FILES, "demo.mjs": "export const ready = 2;\n" });
+  const twice = await call();
+  assert.equal(twice.status, 200);
+  assert.equal(twice.json.draft.version, draft.version + 1);
+  assert.ok(twice.json.etag, "the editor was not handed the ETag to save against");
+  assert.equal(twice.json.job.revisionId, twice.json.draft.revisionId);
+  const revision = await storedRevision(h, post.postId);
+  assert.equal(revision.revisionId, twice.json.draft.revisionId);
+  assert.deepEqual(revision.interactives.map((i) => i.revisionId), [second.revisionId]);
+  assert.equal(revision.body.includes(`/${second.revisionId}/`), true);
+});
+
 test("publishing refuses a reference to an interactive the post does not own", async () => {
   const h = await harness();
   const mine = await newPost(h, "mine");

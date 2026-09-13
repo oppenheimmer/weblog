@@ -226,28 +226,86 @@ try {
     return (frame.sandbox === "" && frame.pressed === "false") || frame;
   });
 
-  console.log("\nReplace and remove:");
+  console.log("\nPublish, replace, put back:");
+  const currentLab = async () => (await page.eval(ROWS)).find((row) => row.name === "lab").meta.split(" · ").at(-1);
+  const publishedLab = async () => {
+    const { data } = await harness.publisher.readIndex();
+    const entry = data.posts?.orbits;
+    if (!entry) return null;
+    const revision = (await harness.store.getJson(`published/posts/${entry.postId}/${entry.revisionId}.json`))?.data;
+    return { revisionId: entry.revisionId, lab: revision?.interactives?.find((item) => item.kind === "demo")?.revisionId };
+  };
+  const publishNow = async () => {
+    await page.click("#publish");
+    await page.until(`document.getElementById("editor-published").textContent.startsWith("Published")`);
+    await page.eval(`document.getElementById("editor-published").textContent = ""`);
+  };
+
+  const v1 = await currentLab();
+  await publishNow();
+  await check("the post publishes with its lab", async () => ((await publishedLab())?.lab === v1) || await publishedLab());
+  const firstPublished = await publishedLab();
+
   fs.writeFileSync(path.join(LAB_DIR, "data.json"), '{"version": 2}\n');
-  const labBefore = (await page.eval(ROWS)).find((row) => row.name === "lab").meta;
   await chooseFolder(() => page.click('#interactive-list button[aria-label="Replace lab with a folder"]'), LAB_DIR);
   await check("Replace uploads a new revision under the same name", async () => {
     await page.until(statusIs("Replaced lab with a new revision."));
     const rows = await page.eval(ROWS);
-    const lab = rows.filter((row) => row.name === "lab");
-    return (rows.length === 2 && lab.length === 1 && lab[0].meta !== labBefore) || { rows, labBefore };
+    return (rows.length === 2 && rows.filter((row) => row.name === "lab").length === 1 && await currentLab() !== v1) || rows;
   });
+  const v2 = await currentLab();
   await page.click("#preview-run");
   await check("running again runs the new revision", async () => untilHits(["lab-data/2"]));
   await page.click("#preview-run");
   await page.until(`document.getElementById("preview-state").textContent === "up to date"`);
 
+  await publishNow();
+  await check("Publish with unchanged words puts the new bundle revision on the site, as a draft revision of its own", async () => {
+    const now = await publishedLab();
+    return (now?.lab === v2 && now.revisionId !== firstPublished.revisionId) || { now, firstPublished };
+  });
+  await check("and this tab saves against that revision afterwards, with no conflict", async () => {
+    await page.eval(`(() => {
+      const body = document.getElementById("body");
+      body.value += " Saved after.";
+      body.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    const status = await page.until(`/^autosaved · v\\d+$|conflict/.test(document.getElementById("save-state").textContent) &&
+      ({ status: document.getElementById("save-state").textContent, dialog: !document.getElementById("conflict").hidden })`);
+    return (/^autosaved/.test(status.status) && !status.dialog) || status;
+  });
+
   fs.writeFileSync(path.join(LAB_DIR, "data.json"), '{"version": 1}\n');
-  const labNow = (await page.eval(ROWS)).find((row) => row.name === "lab").meta;
   await chooseFolder(() => page.click('#interactive-list button[aria-label="Replace lab with a folder"]'), LAB_DIR);
-  await check("replacing with the earlier folder says the post keeps the newer revision, rather than unchanged", async () => {
-    await page.until(statusIs("earlier revision of lab"));
-    const lab = (await page.eval(ROWS)).find((row) => row.name === "lab");
-    return lab.meta === labNow || { before: labNow, after: lab.meta };
+  await check("replacing with the earlier folder puts that revision back, transferring nothing", async () => {
+    await page.until(statusIs("Put lab back to its earlier revision"));
+    return (await currentLab() === v1) || await currentLab();
+  });
+  const CHOOSER = `[...document.querySelectorAll('#interactive-list select[aria-label="Revision of lab"] option')]
+    .map((option) => option.textContent)`;
+  await check("the lab offers its revisions, the one in use first", async () => {
+    const options = await page.until(`${CHOOSER}.length === 2 && ${CHOOSER}`);
+    return (options[0].startsWith(v1) && options[0].endsWith("(in use)") && options[1].startsWith(v2)) || options;
+  });
+  await page.eval(`(() => {
+    const select = document.querySelector('#interactive-list select[aria-label="Revision of lab"]');
+    select.value = ${JSON.stringify(v2)};
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+  await page.click('#interactive-list button[aria-label="Use the chosen revision of lab"]');
+  await check("choosing an earlier revision and Use makes it the one the post publishes", async () => {
+    await page.until(statusIs(`lab now uses revision ${v2}`));
+    return (await currentLab() === v2) || await currentLab();
+  });
+
+  for (const version of [3, 4]) {
+    fs.writeFileSync(path.join(LAB_DIR, "data.json"), `{"version": ${version}}\n`);
+    await chooseFolder(() => page.click('#interactive-list button[aria-label="Replace lab with a folder"]'), LAB_DIR);
+    await page.until(statusIs("Replaced lab with a new revision."));
+  }
+  await check("four revisions later, three are offered", async () => {
+    const options = await page.until(`${CHOOSER}.length >= 3 && ${CHOOSER}`);
+    return (options.length === 3 && !options.some((option) => option.startsWith(v1))) || options;
   });
 
   await chooseFolder(() => page.click("#attach-figure"), CHART_DIR);
@@ -291,8 +349,23 @@ try {
     format.dispatchEvent(new Event("input", { bubbles: true }));
     return [...document.querySelectorAll("#draft-list button")].length;
   })()`) && requests.map((r) => /^\/api\/drafts\/(p_[0-9a-f]{16})\/$/.exec(r.path)?.[1]).filter(Boolean).at(-1);
-  const named = async () => (await harness.store.listAll("")).map(({ key }) => key).filter((key) => key.includes(postId));
+  // Published above, so it comes off the site first: discard refuses a post
+  // that is still on it.
+  await page.click("#publication-unpublish");
+  await page.until(`document.getElementById("publication-unpublish").hidden`);
+  const jobsNaming = async () => {
+    const found = [];
+    for (const { key } of await harness.store.listAll("publications/")) {
+      if ((await harness.store.getJson(key))?.data?.postId === postId) found.push(key);
+    }
+    return found;
+  };
+  const named = async () => [
+    ...(await harness.store.listAll("")).map(({ key }) => key).filter((key) => key.includes(postId)),
+    ...await jobsNaming(),
+  ];
   const before = postId ? (await named()).length : 0;
+  const jobsBefore = postId ? (await jobsNaming()).length : 0;
   await page.click("#discard");
   await check("the open preview goes blank, rather than keeping a page template", async () => {
     const frame = await page.until(`document.getElementById("title").value === "" &&
@@ -303,10 +376,10 @@ try {
       })`);
     return (frame.srcdoc === "" && frame.sandbox === "" && frame.rows === 0) || frame;
   });
-  await check("nothing in the bucket names the discarded post", async () => {
+  await check("nothing in the bucket names the discarded post, its publication jobs included", async () => {
     const left = await named();
     // Asserted present first, so an empty fixture cannot pass for a clean discard.
-    return (before > 0 && left.length === 0) || { postId, before, left };
+    return (before > 0 && jobsBefore > 0 && left.length === 0) || { postId, before, jobsBefore, left };
   });
 
   await check("no script error was thrown", () => scriptErrors.length === 0 || scriptErrors);

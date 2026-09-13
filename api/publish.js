@@ -87,15 +87,27 @@ export default route(async ({ req, res, requestId, store, annotate, fireDeployHo
         "Say whether to publish, unpublish, roll back or rebuild.", { requestId });
     }
 
-    const found = await createDraftStore(store).get(postId);
+    const drafts = createDraftStore(store);
+    let found = await drafts.get(postId);
     if (!found) return sendError(res, 404, "not_found", "No such draft.", { requestId });
+    // Same words, other bundle revisions: a replaced folder, or one put back.
+    // The change is saved as a revision of its own, so it publishes rather than
+    // being answered with the job of the revision that went out before, and
+    // the editor is handed the draft and ETag it now has to save against.
+    let saved = null;
+    if (await publisher.bundlesChangedSince(found.draft)) {
+      saved = await drafts.save(postId, {}, found.etag);
+      found = saved;
+    }
     const job = await publisher.publish(found.draft, {
       // Ties the request to this exact revision, so a double-click publishes
       // once rather than twice.
       idempotencyKey: body.idempotencyKey || `${postId}:${found.draft.revisionId}`,
     });
     annotate({ jobId: job.jobId, revisionId: job.revisionId });
-    return sendJson(res, 200, { job, url: `/${found.draft.slug}/` });
+    return sendJson(res, 200, {
+      job, url: `/${found.draft.slug}/`, ...(saved ? { draft: saved.draft, etag: saved.etag } : {}),
+    });
   } catch (err) {
     if (err instanceof PublishError || err instanceof DraftError) {
       return sendError(res, err.status, err.code ?? "invalid_draft", err.message, {
