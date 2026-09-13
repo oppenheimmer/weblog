@@ -18,9 +18,10 @@ import { rss, sitemap, robots } from "./lib/feed.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 // Directory overrides let the test harness, or a local build, read posts and
-// their assets from outside the engine. Unset in normal use.
+// their post-owned assets from outside the engine. Unset in normal use.
 const POSTS_DIR = process.env.BLOG_POSTS_DIR;
-const ASSETS_DIR = process.env.BLOG_ASSETS_DIR || path.join(ROOT, "assets");
+const ENGINE_ASSETS_DIR = path.join(ROOT, "assets");
+const CONTENT_ASSETS_DIR = process.env.BLOG_ASSETS_DIR || ENGINE_ASSETS_DIR;
 const DIST = process.env.BLOG_DIST_DIR || path.join(ROOT, "dist");
 // Same purpose: lets a test paginate a small corpus. Unset in normal use.
 const FEED_BUDGET = Number(process.env.BLOG_FEED_PAGE_BYTES) || FEED_PAGE_BYTES;
@@ -176,25 +177,25 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
   write("robots.txt", robots());
 
   // Static assets
-  copyInto(path.join(ASSETS_DIR, "styles"), "styles");
+  copyInto(path.join(ENGINE_ASSETS_DIR, "styles"), "styles");
   // Images and embed assets of posts read from a directory, when
   // BLOG_ASSETS_DIR names one that has them, as the test corpus's does. The
   // engine's own assets hold neither: published media comes from R2.
-  copyInto(path.join(ASSETS_DIR, "images"), "images");
-  copyInto(path.join(ASSETS_DIR, "posts"), "assets/posts");
+  copyInto(path.join(CONTENT_ASSETS_DIR, "images"), "images");
+  copyInto(path.join(CONTENT_ASSETS_DIR, "posts"), "assets/posts");
   // Vendored libraries: Distill and D3.
-  copyInto(path.join(ASSETS_DIR, "vendor"), "assets/vendor");
+  copyInto(path.join(ENGINE_ASSETS_DIR, "vendor"), "assets/vendor");
   // The fixture corpus's own images and embed assets, beside the real engine's.
   if (fixtures) {
     copyInto(path.join(PREVIEW_FIXTURES, "assets", "images"), "images");
     copyInto(path.join(PREVIEW_FIXTURES, "assets", "posts"), "assets/posts");
   }
   for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js"]) {
-    const file = path.join(ASSETS_DIR, script);
+    const file = path.join(ENGINE_ASSETS_DIR, script);
     if (fs.existsSync(file)) write(path.join("assets", script), fs.readFileSync(file));
   }
-  if (fs.existsSync(path.join(ASSETS_DIR, "favicon.svg")))
-    write("favicon.svg", fs.readFileSync(path.join(ASSETS_DIR, "favicon.svg")));
+  if (fs.existsSync(path.join(ENGINE_ASSETS_DIR, "favicon.svg")))
+    write("favicon.svg", fs.readFileSync(path.join(ENGINE_ASSETS_DIR, "favicon.svg")));
 
   // KaTeX CSS + fonts (self-hosted; no CDN runtime dependency)
   const katexCss = path.join(KATEX_DIST, "katex.min.css");

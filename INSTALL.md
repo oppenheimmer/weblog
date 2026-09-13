@@ -103,8 +103,9 @@ draft: true                   # excluded from the build
 These files are treated as repository-authored and trusted, so they may use the
 legacy embed hooks described in [README.md](README.md). Posts published from the
 browser never can. Their images and embed assets go in `images/` and `posts/` of
-a copy of `assets/` named by `BLOG_ASSETS_DIR`, as the test corpus's do
-(`test/fixtures/assets/`).
+the directory named by `BLOG_ASSETS_DIR`, as the test corpus's do
+(`test/fixtures/assets/`). Styles, scripts, the favicon and vendored libraries
+always come from the engine's own `assets/` directory.
 
 ---
 
