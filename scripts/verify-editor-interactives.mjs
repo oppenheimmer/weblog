@@ -379,6 +379,10 @@ try {
   // that is still on it.
   await page.click("#publication-unpublish");
   await page.until(`document.getElementById("publication-unpublish").hidden`);
+  await check("unpublished, the post leaves On the site and is under Drafts, marked", async () => {
+    const lists = await page.until(`${LISTS}.drafts.some((text) => /Orbits.*(unpublished|coming off the site)$/.test(text)) && ${LISTS}`);
+    return !lists.site.includes("Orbits") || lists;
+  });
   const jobsNaming = async () => {
     const found = [];
     for (const { key } of await harness.store.listAll("publications/")) {

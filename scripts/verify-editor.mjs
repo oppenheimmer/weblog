@@ -45,8 +45,10 @@ const PANEL = `({
   unpublish: !document.getElementById("publication-unpublish").hidden,
 })`;
 const chipIs = (label) => `document.getElementById("publication-chip").textContent === ${JSON.stringify(label)} && ${PANEL}`;
-const listed = (text, label) =>
-  `[...document.querySelectorAll("#publication-list button")].some((b) => b.textContent.includes(${JSON.stringify(text)}) && b.textContent.includes(${JSON.stringify(label)}))`;
+const listedIn = (list) => (text, label) =>
+  `[...document.querySelectorAll("#${list} button")].some((b) => b.textContent.includes(${JSON.stringify(text)}) && b.textContent.includes(${JSON.stringify(label)}))`;
+const listed = listedIn("publication-list");
+const drafted = listedIn("draft-list");
 // A build lands within the editor's first few checks after a change; the watch
 // backs off to 30 seconds, so give each wait comfortably more than that.
 const SETTLE_MS = 45_000;
@@ -270,9 +272,16 @@ try {
       gone.rollback === "Put back on the site" && !gone.rollbackDisabled && gone.revisions.length === 2) ||
       { coming, gone, dialog: page.dialogs.at(-1) };
   });
+  await check("once off the site, it is listed under Drafts, marked, and no longer under On the site", async () => {
+    const lists = await page.until(`${drafted("Lifecycle probe", "unpublished")} && ({
+      site: document.getElementById("publication-list").textContent,
+      empty: !document.getElementById("publication-empty").hidden,
+    })`);
+    return !lists.site.includes("Lifecycle probe") || lists;
+  });
   await page.reload();
-  await page.until(`document.getElementById("publication-list").textContent.includes("Lifecycle probe")`);
-  await page.eval(`[...document.querySelectorAll("#publication-list button")]
+  await page.until(drafted("Lifecycle probe", "unpublished"));
+  await page.eval(`[...document.querySelectorAll("#draft-list button")]
     .find((button) => button.textContent.includes("Lifecycle probe")).click()`);
   await check("after a reload, Put back still defaults to the revision last on the site", async () => {
     const result = await page.until(`(() => {
@@ -342,15 +351,17 @@ try {
   console.log("\nAfter a reload:");
   await page.reload();
   await check("what is still on its way is watched again, with no click", async () => {
-    await page.until(listed("Welcome", "Coming down"));
+    // A post with no draft is listed under Drafts too once unpublished, since
+    // it is not on the site; its entry follows the site as the panel does.
+    await page.until(drafted("Welcome", "/welcome/ · coming off the site"));
     await finishBuild();
-    return (await page.until(listed("Welcome", "Unpublished"), SETTLE_MS)) === true;
+    return (await page.until(`${drafted("Welcome", "/welcome/ · unpublished")} && !${listed("Welcome", "")}`, SETTLE_MS)) === true;
   });
 
   console.log("\nWhen the site cannot be read:");
   deployment.status = 503;
   await page.reload();
-  await page.until(`document.querySelectorAll("#publication-list button").length === 2`);
+  await page.until(`${listed("Lifecycle probe", "")} && ${drafted("Welcome", "unpublished")}`);
   await page.clickText("#publication-list button", "Lifecycle probe");
   await check("the panel says it could not check, and why, rather than guessing", async () => {
     const p = await page.until(chipIs("Not checked"));
@@ -408,7 +419,7 @@ try {
   });
 
   console.log("\nEditing a publication-only post:");
-  await page.eval(`[...document.querySelectorAll("#publication-list button")]
+  await page.eval(`[...document.querySelectorAll("#draft-list button")]
     .find((button) => button.textContent.includes("Welcome")).click()`);
   await check("a post with no draft offers the selected stored revision as an editable draft", async () => {
     const offered = await page.until(`!document.getElementById("publication").hidden && ({

@@ -242,37 +242,60 @@ function hasUnpublishedWork(draft) {
     return !(draft.publishedRevisionId === publication.revisionId && draft.createdAt === draft.updatedAt);
 }
 
+/** What a Drafts entry says about the site, for a post that has been published before. */
+function siteNote(postId) {
+    const publication = publicationFor(postId);
+    if (!publication) return "";
+    if (publication.published) return "changes not on the site";
+    return publication.site?.state === "removing" ? "coming off the site" : "unpublished";
+}
+
+function sidebarItem(titleText, metaText, current, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    if (current) button.setAttribute("aria-current", "true");
+
+    const title = document.createElement("span");
+    title.className = "draft-title";
+    title.textContent = titleText;
+
+    const meta = document.createElement("span");
+    meta.className = "draft-meta";
+    meta.textContent = metaText;
+
+    button.append(title, meta);
+    button.addEventListener("click", guard(action));
+    const li = document.createElement("li");
+    li.append(button);
+    return li;
+}
+
 function renderDrafts() {
     const drafts = state.drafts.filter(hasUnpublishedWork);
+    // An unpublished post with no draft, as migration or another tool leaves
+    // one, is not on the site either, so it is listed here and opens its panel.
+    const offSite = state.publications.filter((publication) => !publication.published &&
+        !state.drafts.some((draft) => draft.postId === publication.postId));
     // Rebuilt only when what it shows changes: the site panel re-renders every
     // few seconds, and replacing the list each time would move keyboard focus.
-    const key = JSON.stringify([state.postId, drafts.map((draft) =>
-        [draft.postId, draft.revisionId, draft.title, draft.updatedAt, Boolean(publicationFor(draft.postId)?.published)])]);
+    const key = JSON.stringify([state.postId, state.selected,
+        drafts.map((draft) => [draft.postId, draft.revisionId, draft.title, draft.updatedAt, siteNote(draft.postId)]),
+        offSite.map((publication) => [publication.postId, publication.title, publication.slug, siteNote(publication.postId)])]);
     if (els.draftList.dataset.key === key) return;
     els.draftList.dataset.key = key;
-    els.draftList.replaceChildren();
-    els.draftEmpty.hidden = drafts.length > 0;
+    els.draftEmpty.hidden = drafts.length + offSite.length > 0;
 
-    for (const draft of drafts) {
-        const li = document.createElement("li");
-        const button = document.createElement("button");
-        button.type = "button";
-        if (draft.postId === state.postId) button.setAttribute("aria-current", "true");
-
-        const title = document.createElement("span");
-        title.className = "draft-title";
-        title.textContent = draft.title || "Untitled";
-
-        const meta = document.createElement("span");
-        meta.className = "draft-meta";
-        meta.textContent = `v${draft.version} · ${new Date(draft.updatedAt).toLocaleString()}` +
-            (publicationFor(draft.postId)?.published ? " · changes not on the site" : "");
-
-        button.append(title, meta);
-        button.addEventListener("click", guard(() => openDraft(draft.postId)));
-        li.append(button);
-        els.draftList.append(li);
-    }
+    els.draftList.replaceChildren(
+        ...drafts.map((draft) => {
+            const note = siteNote(draft.postId);
+            return sidebarItem(draft.title || "Untitled",
+                `v${draft.version} · ${new Date(draft.updatedAt).toLocaleString()}` + (note ? ` · ${note}` : ""),
+                draft.postId === state.postId, () => openDraft(draft.postId));
+        }),
+        ...offSite.map((publication) => sidebarItem(publication.title || publication.slug,
+            `/${publication.slug}/ · ${siteNote(publication.postId)}`,
+            publication.postId === state.selected, () => showPublication(publication.postId))),
+    );
 }
 
 async function openDraft(postId) {
@@ -1340,26 +1363,14 @@ const formatWhen = (iso) =>
 function renderPublications() {
     renderDrafts();
     const shown = shownPublication();
-    els.publicationList.replaceChildren(...state.publications.map((publication) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        if (publication === shown) button.setAttribute("aria-current", "true");
-
-        const title = document.createElement("span");
-        title.className = "draft-title";
-        title.textContent = publication.title || publication.slug;
-
-        const meta = document.createElement("span");
-        meta.className = "draft-meta";
-        meta.textContent = `/${publication.slug}/ · ${SITE_LABELS[publication.site?.state] ?? SITE_LABELS.unknown}`;
-
-        button.append(title, meta);
-        button.addEventListener("click", guard(() => showPublication(publication.postId)));
-        const li = document.createElement("li");
-        li.append(button);
-        return li;
-    }));
-    els.publicationEmpty.hidden = state.publications.length > 0;
+    // Published posts only, decided by the index as Publish and Unpublish are.
+    // An unpublished post moves to Drafts at once; while the site still shows it,
+    // its entry there and its panel say it is coming off the site.
+    const onSite = state.publications.filter((publication) => publication.published);
+    els.publicationList.replaceChildren(...onSite.map((publication) => sidebarItem(publication.title || publication.slug,
+        `/${publication.slug}/ · ${SITE_LABELS[publication.site?.state] ?? SITE_LABELS.unknown}`,
+        publication === shown, () => showPublication(publication.postId))));
+    els.publicationEmpty.hidden = onSite.length > 0;
     renderPanel();
 }
 
