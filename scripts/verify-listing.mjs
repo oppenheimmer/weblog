@@ -86,6 +86,20 @@ const pagedServer = await serve(paged);
 const SITE = `http://127.0.0.1:${wholeServer.address().port}`;
 const PAGED = `http://127.0.0.1:${pagedServer.address().port}`;
 
+// The same site with the articles-on-white rules stripped from its stylesheet:
+// the control for what those rules change, and for what they leave alone.
+const control = path.join(work, "control");
+fs.cpSync(whole, control, { recursive: true });
+{
+  const sheet = path.join(control, "styles", "blog.css");
+  const css = fs.readFileSync(sheet, "utf8");
+  const stripped = css.replace(/\/\* ---- Articles on white[\s\S]*?\/\* End of articles on white\. \*\//, "");
+  if (stripped === css) throw new Error("the control could not find the articles-on-white rules in blog.css");
+  fs.writeFileSync(sheet, stripped);
+}
+const controlServer = await serve(control);
+const CONTROL = `http://127.0.0.1:${controlServer.address().port}`;
+
 // ---- a small DevTools protocol client -------------------------------------------
 
 const profile = path.join(work, "profile");
@@ -470,6 +484,61 @@ try {
     await check("a tag page never scrolls the page sideways", noSideways);
   });
 
+  await section("Articles on white:", { reducedMotion: true }, async (page) => {
+    const COLOURS = `(() => {
+      const bg = (selector) => {
+        const el = document.querySelector(selector);
+        return el ? getComputedStyle(el).backgroundColor : null;
+      };
+      const image = document.querySelector(".prose img");
+      return {
+        page: bg("body"), header: bg(".nav-bar"), chip: bg(".chip"), footer: bg(".footer-card"),
+        imageEdge: image ? getComputedStyle(image).boxShadow : null,
+      };
+    })()`;
+    // Every computed style of every element, folded into one hash in the page:
+    // a whole listing is too large to carry across the protocol as text.
+    const STYLE_DIGEST = `(() => {
+      let hash = 0x811c9dc5;
+      const add = (text) => {
+        for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193);
+      };
+      const elements = document.querySelectorAll("*");
+      for (const el of elements) {
+        const style = getComputedStyle(el);
+        add(el.tagName);
+        for (let i = 0; i < style.length; i++) add(style[i] + ":" + style.getPropertyValue(style[i]) + ";");
+      }
+      return elements.length + "/" + (hash >>> 0).toString(16);
+    })()`;
+
+    await page.goto(`${SITE}/markdown-kitchen-sink/`);
+    const article = await page.eval(COLOURS);
+    await check("an article's page is white, and its header bar, tags and footer are slate", () =>
+      (article.page === "rgb(255, 255, 255)" && article.header === "rgba(241, 245, 249, 0.9)" &&
+        article.chip === "rgb(241, 245, 249)" && article.footer === "rgb(241, 245, 249)") || article);
+    await check("an image in the article keeps a hairline edge beside its shadow", () =>
+      /^rgba\(18, 52, 77, 0\.14\) 0px 0px 0px 1px, rgba\(18, 52, 77, 0\.12\) 0px 14px 35px/.test(article.imageEdge ?? "") || article);
+    await page.screenshot("article-on-white");
+
+    await page.goto(`${CONTROL}/markdown-kitchen-sink/`);
+    const unstyled = await page.eval(COLOURS);
+    await check("without those rules the same article is on slate, so the checks above measured them", () =>
+      (unstyled.page === "rgb(241, 245, 249)" && unstyled.header !== article.header &&
+        !/0px 0px 0px 1px/.test(unstyled.imageEdge ?? "")) || unstyled);
+
+    for (const [label, address] of [["the home feed", "/"], ["a tag page", "/tags/testing/"]]) {
+      // ?view=feed on both, so a view remembered by one origin cannot differ.
+      await page.goto(`${SITE}${address}?view=feed`);
+      const withRules = await page.eval(STYLE_DIGEST);
+      const colours = await page.eval(COLOURS);
+      await page.goto(`${CONTROL}${address}?view=feed`);
+      const withoutRules = await page.eval(STYLE_DIGEST);
+      await check(`${label} is unchanged: every computed style matches the site without those rules`, () =>
+        (withRules === withoutRules && colours.page === "rgb(241, 245, 249)") || { withRules, withoutRules, colours });
+    }
+  });
+
   await section("Pagination:", {}, async (page) => {
     await page.goto(`${PAGED}/`);
     const seen = [];
@@ -497,6 +566,7 @@ try {
   chrome.kill();
   wholeServer.close();
   pagedServer.close();
+  controlServer.close();
   await sleep(200);
   fs.rmSync(work, { recursive: true, force: true });
 }

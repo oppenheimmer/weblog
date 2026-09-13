@@ -92,6 +92,10 @@ continues at `/page/2/` past about 350 KB of HTML. The table lists every post
 with its date and tags. The choice is remembered, and `?view=feed` or
 `?view=table` overrides it.
 
+Listings show posts as white cards on a slate page. A post's own page is plain
+white for reading, with the header, tags and footer in slate, and article
+images keep a hairline edge.
+
 ---
 
 ## Publishing and the site

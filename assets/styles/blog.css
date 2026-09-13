@@ -548,6 +548,24 @@ a.chip:hover, a.chip:focus-visible {
 .footer-card a { color: var(--brand); font-weight: 600; }
 .footer-card a:hover { color: var(--accent); }
 
+/* ---- Articles on white ----------------------------------------------------
+   The owner's choice (2026-09-14): scientific articles read best on plain
+   white. The feed keeps its white cards on slate; a post page swaps the two,
+   so the page turns white and the chrome that sat as white on slate turns
+   slate with a hairline edge. A figure exported on white keeps a visible edge
+   too. Listings, tag pages and the 404 page are untouched; the editor's
+   preview shows articles as they publish. scripts/verify-listing.mjs measures. */
+body.post-page { --bg: #ffffff; }
+.post-page .nav-bar,
+.post-page .mobile-menu { background: rgba(241, 245, 249, 0.9); border-color: var(--border); }
+.post-page .chip { background: #f1f5f9; }
+.post-page a.chip:hover,
+.post-page a.chip:focus-visible { background: var(--brand-soft); }
+.post-page .footer-card { background: #f1f5f9; border-color: var(--border); }
+.post-page .button-secondary { background: #f1f5f9; }
+.post-page .prose img { box-shadow: 0 0 0 1px var(--border), 0 14px 35px rgba(18, 52, 77, 0.12); }
+/* End of articles on white. */
+
 /* ---- Reveal animation (ported) ------------------------------------------ */
 /* Content is visible by default. The hidden start state is applied only when
    scripting is present to undo it (.js), and only when the visitor has not asked
