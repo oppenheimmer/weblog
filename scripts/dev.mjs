@@ -172,9 +172,12 @@ export async function startDevServer({
         log(line);
       }
     },
+    // Root-relative, so they belong to whichever address the editor was opened
+    // at. Absolute 127.0.0.1 links in a preview opened at localhost were refused
+    // by the editor's img-src 'self', so no image showed (measured in Chromium).
     ...(memory ? {
-      signPut: async (key) => `${site}/local-upload/${toKey(key)}`,
-      signGet: async (key) => `${site}/local-download/${toKey(key)}`,
+      signPut: async (key) => `/local-upload/${toKey(key)}`,
+      signGet: async (key) => `/local-download/${toKey(key)}`,
     } : {}),
   });
 
@@ -195,6 +198,10 @@ export async function startDevServer({
 
   function serveStatic(req, res, url) {
     const send = (status, file, pathname) => {
+      // What Vercel sends with every static file (measured on production,
+      // 2026-09-13). Without it the preview frame, which has no origin of its
+      // own, was refused KaTeX's fonts, so maths lost its glyphs locally only.
+      res.setHeader("access-control-allow-origin", "*");
       for (const [key, value] of headersFor(routing, pathname)) res.setHeader(key, value);
       res.writeHead(status, { "content-type": TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream" });
       res.end(req.method === "HEAD" ? undefined : fs.readFileSync(file));
