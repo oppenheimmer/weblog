@@ -66,13 +66,26 @@ export async function startDevTools(profile, { waitMs = 60_000 } = {}) {
 
   const portFile = path.join(profile, "DevToolsActivePort");
   const deadline = Date.now() + waitMs;
-  while (!fs.existsSync(portFile)) {
+  // The browser creates the file before it has written both lines, so a file
+  // that exists is not yet one that can be read: a CI run once built the
+  // address "ws://127.0.0.1:undefinedundefined" from one caught half-written.
+  const readPort = () => {
+    try {
+      const [port, browserPath] = fs.readFileSync(portFile, "utf8").trim().split("\n");
+      return /^\d+$/.test(port ?? "") && browserPath?.startsWith("/") ? { port, browserPath } : null;
+    } catch {
+      return null;
+    }
+  };
+  let ready = readPort();
+  while (!ready) {
     if (exited) give_up(`the browser stopped before it was ready (${exited})`);
     if (Date.now() > deadline) give_up(`it did not open a debugging port within ${waitMs / 1000}s`);
     await sleep(50);
+    ready = readPort();
   }
 
-  const [port, browserPath] = fs.readFileSync(portFile, "utf8").trim().split("\n");
+  const { port, browserPath } = ready;
   return { chrome, port, browserPath, url: `ws://127.0.0.1:${port}${browserPath}` };
 }
 

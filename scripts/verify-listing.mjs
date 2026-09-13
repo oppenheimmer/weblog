@@ -421,8 +421,17 @@ try {
       const h = await page.eval(`${body}.getBoundingClientRect().height`);
       return h > 10 * 844 || h;
     });
-    await check("the body is visible on arrival, not waiting for a tenth of it to be on screen",
-      async () => (await page.eval(`getComputedStyle(${body}).opacity`)) === "1");
+    await check("the body is visible on arrival, not waiting for a tenth of it to be on screen", async () => {
+      // The reveal animates for 0.7 s from when the observer fires, which a
+      // loaded CI runner once pushed past the fixed wait above. The defect this
+      // guards against leaves the body at 0 for good, so waiting for 1 hides nothing.
+      let opacity = null;
+      for (let i = 0; i < 50 && opacity !== "1"; i++) {
+        opacity = await page.eval(`getComputedStyle(${body}).opacity`);
+        if (opacity !== "1") await sleep(100);
+      }
+      return opacity === "1" || opacity;
+    });
   });
 
   await section("Reduced motion:", { reducedMotion: true }, async (page) => {
