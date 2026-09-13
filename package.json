@@ -1,7 +1,7 @@
 {
-  "name": "website-blog",
+  "name": "weblog",
   "version": "1.0.0",
-  "description": "Sourav Mishra's blog — a tiny Markdown static site generator with build-time KaTeX math.",
+  "description": "A browser-authored personal blog engine that stores posts in Cloudflare R2 and builds static HTML.",
   "type": "module",
   "private": true,
   "scripts": {
