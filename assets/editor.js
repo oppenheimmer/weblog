@@ -222,8 +222,34 @@ const isDirty = () =>
 
 async function refreshList() {
     const { data } = await api("/api/drafts/");
-    const drafts = data.drafts ?? [];
-    state.drafts = drafts;
+    state.drafts = data.drafts ?? [];
+    renderPublications();
+}
+
+/**
+ * Whether a draft holds anything the site does not already show.
+ *
+ * Every post keeps its draft after publishing, since that is what the next edit
+ * starts from, so listing every draft kept published posts under Drafts as if
+ * they were unfinished. A draft whose saved revision is the one on the site —
+ * or a branch of it never saved since — is listed under "On the site" only.
+ * Unpublished posts, and published ones with saved changes, stay in Drafts.
+ */
+function hasUnpublishedWork(draft) {
+    const publication = publicationFor(draft.postId);
+    if (!publication?.published) return true;
+    if (draft.revisionId === publication.revisionId) return false;
+    return !(draft.publishedRevisionId === publication.revisionId && draft.createdAt === draft.updatedAt);
+}
+
+function renderDrafts() {
+    const drafts = state.drafts.filter(hasUnpublishedWork);
+    // Rebuilt only when what it shows changes: the site panel re-renders every
+    // few seconds, and replacing the list each time would move keyboard focus.
+    const key = JSON.stringify([state.postId, drafts.map((draft) =>
+        [draft.postId, draft.revisionId, draft.title, draft.updatedAt, Boolean(publicationFor(draft.postId)?.published)])]);
+    if (els.draftList.dataset.key === key) return;
+    els.draftList.dataset.key = key;
     els.draftList.replaceChildren();
     els.draftEmpty.hidden = drafts.length > 0;
 
@@ -239,14 +265,14 @@ async function refreshList() {
 
         const meta = document.createElement("span");
         meta.className = "draft-meta";
-        meta.textContent = `v${draft.version} · ${new Date(draft.updatedAt).toLocaleString()}`;
+        meta.textContent = `v${draft.version} · ${new Date(draft.updatedAt).toLocaleString()}` +
+            (publicationFor(draft.postId)?.published ? " · changes not on the site" : "");
 
         button.append(title, meta);
         button.addEventListener("click", guard(() => openDraft(draft.postId)));
         li.append(button);
         els.draftList.append(li);
     }
-    renderPublications();
 }
 
 async function openDraft(postId) {
@@ -1312,6 +1338,7 @@ const formatWhen = (iso) =>
     iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "";
 
 function renderPublications() {
+    renderDrafts();
     const shown = shownPublication();
     els.publicationList.replaceChildren(...state.publications.map((publication) => {
         const button = document.createElement("button");

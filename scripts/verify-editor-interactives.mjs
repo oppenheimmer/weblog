@@ -245,6 +245,14 @@ try {
   await publishNow();
   await check("the post publishes with its lab", async () => ((await publishedLab())?.lab === v1) || await publishedLab());
   const firstPublished = await publishedLab();
+  const LISTS = `({
+    drafts: [...document.querySelectorAll("#draft-list button")].map((b) => b.textContent),
+    site: [...document.querySelectorAll("#publication-list .draft-title")].map((t) => t.textContent),
+  })`;
+  await check("once published, the post leaves Drafts and is listed under On the site", async () => {
+    const lists = await page.until(`${LISTS}.site.includes("Orbits") && !${LISTS}.drafts.some((text) => text.includes("Orbits")) && ${LISTS}`);
+    return lists === true || Boolean(lists.site) || lists;
+  });
 
   fs.writeFileSync(path.join(LAB_DIR, "data.json"), '{"version": 2}\n');
   await chooseFolder(() => page.click('#interactive-list button[aria-label="Replace lab with a folder"]'), LAB_DIR);
@@ -273,6 +281,10 @@ try {
     const status = await page.until(`/^autosaved · v\\d+$|conflict/.test(document.getElementById("save-state").textContent) &&
       ({ status: document.getElementById("save-state").textContent, dialog: !document.getElementById("conflict").hidden })`);
     return (/^autosaved/.test(status.status) && !status.dialog) || status;
+  });
+  await check("a saved change the site does not show lists it under Drafts again, marked", async () => {
+    const entry = await page.until(`${LISTS}.drafts.find((text) => text.includes("Orbits"))`);
+    return /changes not on the site$/.test(entry) || entry;
   });
 
   fs.writeFileSync(path.join(LAB_DIR, "data.json"), '{"version": 1}\n');
