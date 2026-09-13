@@ -300,12 +300,16 @@ try {
 
   for (const version of [3, 4]) {
     fs.writeFileSync(path.join(LAB_DIR, "data.json"), `{"version": ${version}}\n`);
+    // Each Replace reports the same words, so a wait on them would match the
+    // previous one's report. Found on a CI runner, which read the list early.
+    await page.eval(`document.getElementById("interactive-status").textContent = ""`);
     await chooseFolder(() => page.click('#interactive-list button[aria-label="Replace lab with a folder"]'), LAB_DIR);
     await page.until(statusIs("Replaced lab with a new revision."));
   }
   await check("four revisions later, three are offered", async () => {
     const options = await page.until(`${CHOOSER}.length >= 3 && ${CHOOSER}`);
-    return (options.length === 3 && !options.some((option) => option.startsWith(v1))) || options;
+    return (options.length === 3 && options[0].endsWith("(in use)") && !options.some((option) => option.startsWith(v1)) &&
+      options[0].startsWith(await currentLab())) || options;
   });
 
   await chooseFolder(() => page.click("#attach-figure"), CHART_DIR);
