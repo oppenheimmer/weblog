@@ -28,6 +28,8 @@ const els = {
     publicationRollback: $("publication-rollback"), publicationRebuild: $("publication-rebuild"),
     publicationBranch: $("publication-branch"), publicationUnpublish: $("publication-unpublish"),
     rebuildNote: $("rebuild-note"),
+    attachLab: $("attach-lab"), attachFigure: $("attach-figure"), interactiveInput: $("interactive-input"),
+    interactiveList: $("interactive-list"), interactiveStatus: $("interactive-status"), previewRun: $("preview-run"),
 };
 
 const state = {
@@ -44,8 +46,13 @@ const state = {
     autosave: { timer: null },
     attachments: [],
     attachmentAlts: new Map(),
+    // The newest revision of each interactive, which is what a post publishes.
+    interactives: [],
+    // What the folder picker was opened for: a kind, and the interactive a
+    // Replace names, if it was Replace.
+    interactivePick: null,
     drafts: [],
-    preview: { open: false, seq: 0, controller: null, timer: null, refresher: null, lastKey: null },
+    preview: { open: false, run: false, seq: 0, controller: null, timer: null, refresher: null, lastKey: null },
     readiness: { seq: 0, controller: null, timer: null },
     // What the site shows. `selected` is a post picked from "On the site" whose
     // draft is not the one open; otherwise the panel follows the open draft.
@@ -256,7 +263,9 @@ async function loadDraft(draft, etag) {
     writeForm(draft);
     for (const name of FIELDS) clearInvalid(els[name]);
     state.saved = readForm();
+    showRunning(false);
     await loadAttachments();
+    await loadInteractives();
     setStatus(`saved · v${draft.version}`);
     setError("");
     writeText(els.publishedNote, "");
@@ -274,7 +283,9 @@ async function newPost() {
     writeForm({ date: new Date().toISOString().slice(0, 10) });
     for (const name of FIELDS) clearInvalid(els[name]);
     state.saved = readForm();
+    showRunning(false);
     await loadAttachments();
+    await loadInteractives();
     setStatus("not saved");
     setError("");
     writeText(els.publishedNote, "");
@@ -511,10 +522,24 @@ function sourceReferences() {
     } else {
         add("image", /attachment:\/\/([^\s)\]]*)/g);
         add("tex", /::tex\[([^\]]*)\]/g);
+        add("demo", /::demo\[([^\]]*)\]/g);
+        add("figure", /::figure\[([^\]]*)\]/g);
     }
-    const known = new Set(state.attachments.map((attachment) => attachment.id));
+    const known = new Set([...state.attachments, ...state.interactives].map((item) => item.id));
     return [...new Map(found.filter((item) => !known.has(item.id))
         .map((item) => [`${item.kind}:${item.id}`, item])).values()];
+}
+
+const REFERENCE_KINDS = { image: "image", tex: "TeX", demo: "lab", figure: "figure" };
+
+/** What a reference of this kind can be relinked to: `{ id, kind, label }`. */
+function relinkChoices(kind) {
+    if (kind === "demo" || kind === "figure") {
+        return state.interactives.filter((record) => record.kind === kind)
+            .map((record) => ({ id: record.id, kind, label: record.name }));
+    }
+    return state.attachments.filter((attachment) => attachment.kind === kind)
+        .map((attachment) => ({ id: attachment.id, kind, label: attachment.publicName }));
 }
 
 function renderRelinking() {
@@ -523,17 +548,17 @@ function renderRelinking() {
     els.unresolvedReference.replaceChildren(...missing.map((item) => {
         const option = document.createElement("option");
         option.value = `${item.kind}:${item.id}`;
-        option.textContent = `${item.id} (${item.kind === "tex" ? "TeX" : "image"})`;
+        option.textContent = `${item.id} (${REFERENCE_KINDS[item.kind]})`;
         return option;
     }));
     if (missing.some((item) => `${item.kind}:${item.id}` === oldChoice)) els.unresolvedReference.value = oldChoice;
 
     const selected = missing.find((item) => `${item.kind}:${item.id}` === els.unresolvedReference.value) ?? missing[0];
-    const choices = state.attachments.filter((attachment) => attachment.kind === selected?.kind);
-    els.relinkAttachment.replaceChildren(...choices.map((attachment) => {
+    const choices = selected ? relinkChoices(selected.kind) : [];
+    els.relinkAttachment.replaceChildren(...choices.map((choice) => {
         const option = document.createElement("option");
-        option.value = attachment.id;
-        option.textContent = attachment.publicName;
+        option.value = choice.id;
+        option.textContent = choice.label;
         return option;
     }));
     els.relinkTools.hidden = !selected || choices.length === 0;
@@ -542,14 +567,17 @@ function renderRelinking() {
 function relinkReference() {
     const [kind, ...parts] = els.unresolvedReference.value.split(":");
     const oldId = parts.join(":");
-    const replacement = state.attachments.find((attachment) => attachment.id === els.relinkAttachment.value);
-    if (!oldId || !replacement || replacement.kind !== kind) return;
+    const replacement = relinkChoices(kind).find((choice) => choice.id === els.relinkAttachment.value);
+    if (!oldId || !replacement) return;
     const old = escapePattern(oldId);
-    if (els.format.value === "latex") {
+    if (kind === "demo" || kind === "figure") {
+        replaceSourceReferences(new RegExp(`(::${kind}\\[)${old}(\\])`, "g"),
+            (match) => `${match[1]}${replacement.id}${match[2]}`);
+    } else if (els.format.value === "latex") {
         const pattern = kind === "tex"
             ? new RegExp(`(\\\\input\\{attachments\\/)${old}((?:\\.tex)?\\})`, "g")
             : new RegExp(`(\\\\includegraphics(?:\\[[^\\]]*\\])?\\{attachments\\/)${old}(?:\\.[^}]+)?(\\})`, "g");
-        const suffix = kind === "tex" ? ".tex" : `.${replacement.publicName.split(".").pop()}`;
+        const suffix = kind === "tex" ? ".tex" : `.${replacement.label.split(".").pop()}`;
         replaceSourceReferences(pattern, (match) => `${match[1]}${replacement.id}${suffix}${match[2]}`);
     } else {
         const pattern = kind === "tex"
@@ -558,7 +586,7 @@ function relinkReference() {
         replaceSourceReferences(pattern, (match) => `${match[1]}${replacement.id}${match[2] ?? ""}`);
     }
     els.body.dispatchEvent(new Event("input", { bubbles: true }));
-    setAttachStatus(`Relinked ${oldId} to ${replacement.publicName}.`);
+    setAttachStatus(`Relinked ${oldId} to ${replacement.label}.`);
 }
 
 /** The reference to type into the body, in whichever format the post is written. */
@@ -791,6 +819,271 @@ async function removeAttachment(attachment) {
     setAttachStatus(`Removed ${attachment.publicName}. Delete its reference from the body too, or publishing will stop.`);
 }
 
+// ---------------------------------------------------------------- interactives
+
+const KIND_NAMES = { demo: "lab", figure: "figure" };
+// The staging push's conventions (lib/server/staging.mjs), so one folder
+// attaches the same way from either front end.
+const BUNDLE_CONFIG = "interactive.json";
+const BUNDLE_CONFIG_FIELDS = ["kind", "entry", "fallback", "dependencies"];
+const DEFAULT_ENTRY = { demo: "index.html", figure: "main.mjs" };
+const DEFAULT_FALLBACK = "fallback.html";
+const BUNDLE_PUT_PARALLELISM = 4;
+
+const setInteractiveStatus = (text) => writeText(els.interactiveStatus, text);
+
+/** The public name the server will give a folder (sanitizeInteractiveName in lib/interactives.mjs). */
+function interactiveName(folder) {
+    return String(folder).replace(/\.[^.]*$/, "").toLowerCase().normalize("NFKD")
+        .replace(/\p{M}+/gu, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+        .slice(0, 60).replace(/-+$/g, "") || "interactive";
+}
+
+const interactiveReference = (record) => `\n::${record.kind}[${record.id}]\n`;
+
+async function loadInteractives() {
+    state.interactives = [];
+    if (state.postId) {
+        const { data } = await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}&kind=interactive`);
+        // Every stored revision comes back, oldest first. Keeping the last of
+        // each id keeps the one publishing takes.
+        const newest = new Map();
+        for (const record of data.interactives ?? []) newest.set(record.id, record);
+        state.interactives = [...newest.values()];
+    }
+    renderInteractives();
+}
+
+function renderInteractives() {
+    els.interactiveList.replaceChildren(...state.interactives.map((record) => {
+        const li = document.createElement("li");
+        li.className = "attachment";
+
+        const name = document.createElement("span");
+        name.className = "attachment-name";
+        name.textContent = record.name;
+
+        const meta = document.createElement("span");
+        meta.className = "attachment-meta";
+        meta.textContent = [
+            record.kind === "demo" ? "Lab" : "Figure",
+            plural(record.files.length, "file"),
+            formatBytes(record.files.reduce((total, file) => total + file.bytes, 0)),
+            record.dependencies?.length ? `uses ${record.dependencies.join(", ")}` : null,
+            record.revisionId,
+        ].filter(Boolean).join(" · ");
+
+        const actions = document.createElement("span");
+        actions.className = "attachment-actions";
+        const button = (text, label, className, onClick) => {
+            const el = document.createElement("button");
+            el.type = "button";
+            el.className = `button ${className} button-small`;
+            el.textContent = text;
+            el.setAttribute("aria-label", label);
+            el.addEventListener("click", onClick);
+            return el;
+        };
+        actions.append(
+            button("Insert", `Insert ${record.name}`, "button-secondary", () => {
+                insertOnOwnLine(interactiveReference(record));
+                els.body.focus();
+            }),
+            button("Replace", `Replace ${record.name} with a folder`, "button-secondary",
+                guard(() => pickFolder(record.kind, record))),
+            button("Remove", `Remove ${record.name}`, "button-danger", guard(() => removeInteractive(record))),
+        );
+        li.append(name, meta, actions);
+        return li;
+    }));
+    els.previewRun.hidden = state.interactives.length === 0;
+    if (!state.interactives.length) showRunning(false);
+    renderRelinking();
+    // A running preview is not refreshed by typing, but a changed bundle is
+    // exactly what the author wants to see run.
+    schedulePreview({ rerun: true });
+    scheduleReadiness();
+}
+
+function pickFolder(kind, replace = null) {
+    if (els.format.value === "latex") {
+        throw new Error("A LaTeX post cannot include an interactive yet. Switch the format to Markdown to use one.");
+    }
+    state.interactivePick = { kind, replace };
+    els.interactiveInput.click();
+}
+
+const toHex = (buffer) => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+/**
+ * A chosen folder as the manifest a bundle upload agrees to.
+ *
+ * Only declarations travel: names, sizes and SHA-256s computed here. The
+ * server derives the revision from them and rehashes every byte that arrives,
+ * so nothing this function says is taken on trust.
+ */
+async function readFolder(picked, kind) {
+    const folder = picked[0]?.webkitRelativePath?.split("/")[0];
+    if (!folder) throw new Error("Choose a folder, not individual files.");
+    let config = {};
+    let skipped = 0;
+    const files = [];
+    for (const file of picked) {
+        const name = file.webkitRelativePath.split("/").slice(1).join("/");
+        // .DS_Store, .git and the like belong to the file manager, not the bundle.
+        if (name.split("/").some((part) => part.startsWith("."))) {
+            skipped += 1;
+            continue;
+        }
+        if (name === BUNDLE_CONFIG) {
+            try {
+                config = JSON.parse(await file.text());
+            } catch {
+                throw new Error(`${folder}/${BUNDLE_CONFIG} is not valid JSON.`);
+            }
+            if (!config || typeof config !== "object" || Array.isArray(config)) {
+                throw new Error(`${folder}/${BUNDLE_CONFIG} must be a JSON object.`);
+            }
+            const refused = Object.keys(config).filter((key) => !BUNDLE_CONFIG_FIELDS.includes(key));
+            if (refused.length) {
+                throw new Error(`${folder}/${BUNDLE_CONFIG} sets ${refused.join(", ")}; it may set only ${BUNDLE_CONFIG_FIELDS.join(", ")}.`);
+            }
+            continue;
+        }
+        files.push({ file, name });
+    }
+    if (config.kind !== undefined && config.kind !== kind) {
+        throw new Error(`${folder}/${BUNDLE_CONFIG} says this is a ${KIND_NAMES[config.kind] ?? config.kind}, ` +
+            `not a ${KIND_NAMES[kind]}.`);
+    }
+    const declared = await Promise.all(files.map(async ({ file, name }) => ({
+        name,
+        bytes: file.size,
+        sha256: toHex(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())),
+    })));
+    return {
+        folder,
+        skipped,
+        files: new Map(files.map(({ file, name }) => [name, file])),
+        manifest: {
+            kind,
+            name: folder,
+            entry: config.entry ?? DEFAULT_ENTRY[kind],
+            fallback: config.fallback ?? DEFAULT_FALLBACK,
+            dependencies: config.dependencies ?? [],
+            files: declared,
+        },
+    };
+}
+
+/**
+ * Agree, transfer, verify: the attachment protocol, once per file.
+ *
+ * An unchanged folder is the revision already stored, and the server says so
+ * without signing anything.
+ */
+async function uploadBundle(folder, interactiveId) {
+    const { data: agreed } = await api("/api/uploads/", {
+        method: "POST",
+        body: { action: "begin-bundle", postId: state.postId, manifest: folder.manifest, ...(interactiveId ? { interactiveId } : {}) },
+    });
+    if (agreed.unchanged) return { record: agreed.record, unchanged: true };
+
+    const queue = [...agreed.uploads];
+    let sent = 0;
+    const worker = async () => {
+        for (let upload = queue.shift(); upload; upload = queue.shift()) {
+            let put;
+            try {
+                put = await fetch(upload.url, { method: upload.method, headers: upload.headers, body: folder.files.get(upload.name) });
+            } catch {
+                throw new Error("The upload was blocked before it reached storage. " +
+                    "The storage bucket may not yet allow uploads from this site (CORS).");
+            }
+            if (!put.ok) throw new Error(`Storage refused ${upload.name} (${put.status}).`);
+            sent += 1;
+            setInteractiveStatus(`Uploading ${folder.folder}: ${sent} of ${agreed.uploads.length} files…`);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(BUNDLE_PUT_PARALLELISM, queue.length) }, worker));
+
+    const { data } = await api("/api/uploads/", {
+        method: "POST", body: { action: "complete-bundle", postId: state.postId, uploadId: agreed.uploadId },
+    });
+    return { record: data.interactive, unchanged: false };
+}
+
+async function attachFolder(picked) {
+    const pick = state.interactivePick;
+    state.interactivePick = null;
+    if (!pick || !picked.length) return;
+    if (els.format.value === "latex") {
+        throw new Error("A LaTeX post cannot include an interactive yet. Switch the format to Markdown to use one.");
+    }
+    // Bundles belong to a saved draft, as attachments do.
+    if (!state.postId) {
+        await save();
+        if (!state.postId) return;
+    }
+    try {
+        setInteractiveStatus("Reading the folder…");
+        const folder = await readFolder(picked, pick.kind);
+        let replace = pick.replace;
+        // Attaching a folder under a name this post already has, of the same
+        // kind, is almost always an update. Asked rather than assumed, since
+        // the other answer attaches it beside the first under a new name.
+        const namesake = state.interactives.find((record) =>
+            record.kind === pick.kind && record.name === interactiveName(folder.folder));
+        if (!replace && namesake && confirm(`This post already has a ${KIND_NAMES[pick.kind]} called ${namesake.name}. ` +
+            "Replace it with this folder? Cancel attaches the folder as a separate one.")) {
+            replace = namesake;
+        }
+        if (replace) folder.manifest.name = replace.name;
+
+        const { record, unchanged } = await uploadBundle(folder, replace?.id);
+        await loadInteractives();
+        let note;
+        if (replace) {
+            // An unchanged folder is either the revision already newest, or an
+            // older one stored before it. Publishing takes the newest, so the
+            // second leaves the post as it was, and saying "unchanged" would
+            // hide that (§4.2: a reference names an interactive, not a revision).
+            note = !unchanged
+                ? `Replaced ${record.name} with a new revision.`
+                : record.revisionId === replace.revisionId
+                    ? `${record.name} is unchanged: that folder is the revision already attached.`
+                    : `That folder is an earlier revision of ${record.name}. The post keeps the newer one, ` +
+                      "because publishing takes the newest; change any file to attach it as new.";
+        } else {
+            // A body written for the staging push names the folder, and the
+            // push writes the id in its place. So does this.
+            let linked = 0;
+            replaceSourceReferences(new RegExp(`(::${record.kind}\\[)${escapePattern(folder.folder)}(\\])`, "g"), (match) => {
+                linked += 1;
+                return `${match[1]}${record.id}${match[2]}`;
+            });
+            if (linked) els.body.dispatchEvent(new Event("input", { bubbles: true }));
+            else insertOnOwnLine(interactiveReference(record));
+            note = linked
+                ? `Attached ${record.name} and linked ::${record.kind}[${folder.folder}] to it.`
+                : `Attached ${record.name} and inserted it.`;
+        }
+        if (folder.skipped) note += ` Left out ${plural(folder.skipped, "hidden file")}.`;
+        setInteractiveStatus(note);
+    } catch (err) {
+        setInteractiveStatus("");
+        throw err;
+    }
+}
+
+async function removeInteractive(record) {
+    if (!confirm(`Remove ${record.name} and every revision of it from this draft? Pages already published keep their copy.`)) return;
+    await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}&interactiveId=${encodeURIComponent(record.id)}`,
+        { method: "DELETE" });
+    await loadInteractives();
+    setInteractiveStatus(`Removed ${record.name}. Delete its ::${record.kind} reference from the body too, or publishing will stop.`);
+}
+
 // ---------------------------------------------------------------- preview
 
 const PREVIEW_DEBOUNCE_MS = 500;
@@ -815,10 +1108,17 @@ function showDiagnostics(list = []) {
 }
 
 /** Everything a render depends on, so an identical request is not repeated. */
-const previewKey = () => JSON.stringify([readForm(), state.postId, state.attachments.map((a) => a.id)]);
+const previewKey = () => JSON.stringify([readForm(), state.postId, state.attachments.map((a) => a.id),
+    state.interactives.map((record) => record.revisionId), state.preview.run]);
 
-function schedulePreview({ force = false } = {}) {
+function schedulePreview({ force = false, rerun = false } = {}) {
     if (!state.preview.open) return;
+    // Re-rendering restarts every lab and figure, so a running preview waits
+    // for the author rather than restarting on each pause in typing.
+    if (state.preview.run && !rerun && !force) {
+        if (previewKey() !== state.preview.lastKey) setPreviewState("running · Stop to see edits");
+        return;
+    }
     clearTimeout(state.preview.timer);
     state.preview.timer = setTimeout(() => { refreshPreview({ force }); }, PREVIEW_DEBOUNCE_MS);
 }
@@ -839,20 +1139,29 @@ async function refreshPreview({ force = false } = {}) {
     const controller = new AbortController();
     state.preview.controller = controller;
     const seq = ++state.preview.seq;
-    setPreviewState("rendering…");
+    const run = state.preview.run;
+    setPreviewState(run ? "starting interactives…" : "rendering…");
 
     try {
         const { data } = await api("/api/preview/", {
-            method: "POST", body: { ...readForm(), postId: state.postId }, signal: controller.signal,
+            method: "POST", body: { ...readForm(), postId: state.postId, run }, signal: controller.signal,
         });
         if (seq !== state.preview.seq) return;
+        // Scripts only while running interactives, and never an origin of its
+        // own: a figure gets the previewed article, a lab its production
+        // sandbox inside it, and neither the editor. Set before srcdoc, since
+        // the flags apply when the frame navigates.
+        const running = run && data.running > 0;
+        els.previewFrame.setAttribute("sandbox", running ? "allow-scripts" : "");
         els.previewFrame.srcdoc = data.html;
         showDiagnostics(data.diagnostics);
         state.preview.lastKey = key;
 
         const errors = data.diagnostics.filter((d) => d.level === "error").length;
         const warnings = data.diagnostics.length - errors;
-        if (errors) setPreviewState(`${errors} to fix before publishing`, "error");
+        if (running) setPreviewState(`running ${plural(data.running, "interactive")}`);
+        else if (run) setPreviewState("nothing to run: the body uses no attached interactive");
+        else if (errors) setPreviewState(`${errors} to fix before publishing`, "error");
         else if (warnings) setPreviewState(`${warnings} warning${warnings === 1 ? "" : "s"}`);
         else setPreviewState("up to date");
     } catch (err) {
@@ -861,8 +1170,26 @@ async function refreshPreview({ force = false } = {}) {
     }
 }
 
+/** The Run toggle's own state, without rendering. */
+function showRunning(run) {
+    state.preview.run = run;
+    els.previewRun.setAttribute("aria-pressed", String(run));
+    writeText(els.previewRun, run ? "Stop interactives" : "Run interactives");
+}
+
+function setRunning(run) {
+    showRunning(run);
+    refreshPreview({ force: true });
+}
+
 function setPreviewOpen(open) {
     state.preview.open = open;
+    if (!open && state.preview.run) {
+        showRunning(false);
+        // Stop what is running rather than leave it working out of sight.
+        els.previewFrame.setAttribute("sandbox", "");
+        els.previewFrame.srcdoc = "";
+    }
     els.previewPane.hidden = !open;
     els.writing.dataset.preview = open ? "on" : "off";
     els.previewToggle.setAttribute("aria-pressed", String(open));
@@ -872,7 +1199,9 @@ function setPreviewOpen(open) {
     if (open) {
         state.preview.lastKey = null;
         refreshPreview();
-        state.preview.refresher = setInterval(() => refreshPreview({ force: true }), PREVIEW_REFRESH_MS);
+        state.preview.refresher = setInterval(() => {
+            if (!state.preview.run) refreshPreview({ force: true });
+        }, PREVIEW_REFRESH_MS);
     } else {
         state.preview.controller?.abort();
     }
@@ -1316,11 +1645,15 @@ for (const id of FIELDS) {
         schedulePreview();
         scheduleReadiness();
         if (id === "body") renderRelinking();
-        if (id === "format") renderAttachments();
+        if (id === "format") {
+            renderAttachments();
+            renderInteractives();
+        }
     });
 }
 
 els.previewToggle.addEventListener("click", () => setPreviewOpen(!state.preview.open));
+els.previewRun.addEventListener("click", () => setRunning(!state.preview.run));
 
 els.publicationRevision.addEventListener("change", () => renderPanel());
 els.publicationBranch.addEventListener("click", guard(branchShown));
@@ -1329,6 +1662,13 @@ els.publicationRebuild.addEventListener("click", guard(rebuildSite));
 els.publicationUnpublish.addEventListener("click", guard(unpublishShown));
 
 els.attach.addEventListener("click", () => els.attachInput.click());
+els.attachLab.addEventListener("click", guard(() => pickFolder("demo")));
+els.attachFigure.addEventListener("click", guard(() => pickFolder("figure")));
+els.interactiveInput.addEventListener("change", guard(async () => {
+    const picked = [...els.interactiveInput.files];
+    els.interactiveInput.value = ""; // choosing the same folder again should fire change again
+    await attachFolder(picked);
+}));
 els.importSource.addEventListener("click", () => els.importSourceInput.click());
 
 els.importSourceInput.addEventListener("change", guard(async () => {

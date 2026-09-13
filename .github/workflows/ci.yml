@@ -111,6 +111,11 @@ jobs:
       - name: The editor without a mouse, a picker or a screen
         run: node scripts/verify-editor-access.mjs
 
+      # Folders chosen through the browser's own file chooser, then Run
+      # preview, whose figures and labs must not reach the editor.
+      - name: Interactive folders and Run preview
+        run: node scripts/verify-editor-interactives.mjs
+
       - name: A sealed lab stays sealed, framed or opened directly
         run: node scripts/verify-demo-sandbox.mjs
 

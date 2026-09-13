@@ -268,6 +268,18 @@ Editor:
 - An attachment uploads, previews and publishes. If the upload fails at the
   preflight, the R2 CORS rule in step 2 is missing or names the wrong origin.
 
+Interactives, once one is published:
+
+```bash
+node scripts/verify-live-bundles.mjs
+```
+
+It reads the live site anonymously. Run preview addresses must reach the
+preview function; each published lab must answer with `sandbox allow-scripts`
+and `Access-Control-Allow-Origin: *` and land on its own directory, and each
+figure module with the sandbox policy and no read header. Without a published
+interactive it checks the Run addresses only and exits 2.
+
 ---
 
 ## 7. Day-to-day publishing
@@ -281,11 +293,14 @@ There is no repository step and no terminal step.
    Attach images or `.tex` snippets with the attach button, by pasting, or by
    dropping them on the page. Each attachment's reference is inserted on a line
    of its own. Image alt text is editable before Insert, and a missing reference
-   can be relinked to a verified attachment of the same kind.
+   can be relinked to a verified attachment of the same kind. **Interactives**
+   attaches a lab or figure folder, and replaces or removes one (README,
+   *Interactive posts*).
 3. **Preview** renders the fields as they would publish, in a sandboxed frame.
    Its errors are exactly what publishing would refuse; render warnings — an
    unsupported LaTeX command, a formula that did not parse — never block
-   publishing.
+   publishing. With an interactive attached, **Run interactives** runs them in
+   that frame, still without access to the editor.
 4. Changes autosave after a short quiet period; **Save** makes an immediate
    checkpoint. **Publish** saves first, freezes that revision into R2,
    updates the published index, and fires the deploy hook.
@@ -311,11 +326,11 @@ the same engine with new content. Both go through the same build.
 
 ### Pushing a staged post from a terminal
 
-A post with interactive figures or labs is pushed from a folder, because the
-editor cannot attach a bundle yet. Stage one post per folder under `staging/`
-(gitignored): its `.md` source and one subfolder per `::demo[<folder>]` or
-`::figure[<folder>]` it names. README's *Pushing a post with its interactives*
-describes the layout.
+A post written on disk, with its interactive figures or labs, can be pushed
+from a folder instead of attached in the editor. Stage one post per folder
+under `staging/` (gitignored): its `.md` source and one subfolder per
+`::demo[<folder>]` or `::figure[<folder>]` it names. README's *Pushing a post
+with its interactives* describes the layout.
 
 ```bash
 node --env-file=.env scripts/push.mjs staging/<post>            # dry run
@@ -338,8 +353,8 @@ anything is staged, `npm test` fails its engine-purity tripwire on purpose.
 - **Several drafts share the address.** Pass `--post <postId>`.
 
 Two limits: a folder cannot be pushed back to an earlier revision than the post
-already has, and removing an interactive from a post is an API action
-(`DELETE /api/uploads/?postId=…&interactiveId=…`), not something a push does.
+already has, and a push never removes an interactive; **Remove** in the editor
+does.
 
 ---
 
@@ -514,6 +529,7 @@ node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no 
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
 node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
+node scripts/verify-editor-interactives.mjs  # attach, replace and remove folders; Run preview stays out of the editor
 ```
 
 Those drive Chromium over the DevTools protocol; set `CHROMIUM` if the binary is

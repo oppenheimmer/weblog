@@ -239,18 +239,45 @@ test("a reference inside code is left alone", async () => {
   assert.equal(revision.interactives.length, 1);
 });
 
-test("a hostile fallback is refused, not cleaned", async () => {
+test("a hostile fallback is refused when it is attached, and nothing is promoted", async () => {
   const h = await harness();
   const post = await newPost(h);
-  const bundle = await attach(h, post.postId, {
-    ...FILES,
-    "fallback.html": '<p onclick="steal()">hello</p>',
-  });
+  await assert.rejects(
+    () => attach(h, post.postId, { ...FILES, "fallback.html": '<p onclick="steal()">hello</p>' }),
+    (err) => err.code === "fallback_refused" && err.status === 422
+  );
+  assert.deepEqual(await h.interactives.list(post.postId), []);
+  assert.deepEqual(await h.store.listAll(`interactives/${post.postId}/names/`), [],
+    "a refused bundle claimed a public name");
+});
+
+test("a hostile fallback stored before that check is refused at publish, not cleaned", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const bundle = await attach(h, post.postId);
+  // What an older upload path could have stored: the same verified record,
+  // with a fallback that completion today would refuse.
+  await h.store.put(keys.interactiveFile(post.postId, bundle.id, bundle.revisionId, "fallback.html"),
+    Buffer.from('<p onclick="steal()">hello</p>'));
 
   const ready = await saveBody(h, post, `::demo[${bundle.id}]`);
   await assert.rejects(
     () => h.publisher.publish(ready),
     (err) => err.code === "fallback_refused"
+  );
+});
+
+test("a new revision of an interactive keeps its kind", async () => {
+  const h = await harness();
+  const post = await newPost(h);
+  const bundle = await attach(h, post.postId);
+  await assert.rejects(
+    () => h.interactives.begin({
+      postId: post.postId, interactiveId: bundle.id,
+      manifest: manifest({ "main.mjs": "export function mount() {}", "fallback.html": "<p>f</p>" },
+        { kind: "figure", entry: "main.mjs" }),
+    }),
+    (err) => err.code === "wrong_kind" && err.status === 409
   );
 });
 

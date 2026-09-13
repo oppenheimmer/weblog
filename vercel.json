@@ -18,6 +18,14 @@
     {
       "source": "/login/",
       "destination": "/api/login"
+    },
+    {
+      "source": "/api/preview/run/:grant/",
+      "destination": "/api/preview?grant=:grant"
+    },
+    {
+      "source": "/api/preview/run/:grant/:file*",
+      "destination": "/api/preview?grant=:grant&file=:file*"
     }
   ],
   "cleanUrls": true,

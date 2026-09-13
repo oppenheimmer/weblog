@@ -34,17 +34,26 @@ const ROUTES = [
   [/^\/api\/drafts\/$/, () => "api/drafts/index.js"],
   [/^\/api\/drafts\/(p_[0-9a-f]{16})\/$/, () => "api/drafts/[id]/index.js", (m) => ({ id: m[1] })],
   [/^\/api\/(uploads|preview)\/$/, (m) => `api/${m[1]}/index.js`],
+  // vercel.json rewrites these to the preview function; the handler reads the
+  // grant from the path when no query carries it.
+  [/^\/api\/preview\/run\/[^/]+\/.*$/, () => "api/preview/index.js"],
   [/^\/api\/publish\/$/, () => "api/publish.js"],
 ];
 const STATIC = {
   "/assets/editor.js": ["assets/editor.js", "text/javascript"],
+  "/assets/blog.js": ["assets/blog.js", "text/javascript"],
+  "/assets/preview-run.js": ["assets/preview-run.js", "text/javascript"],
+  "/assets/vendor/d3.v7.9.0.min.js": ["assets/vendor/d3.v7.9.0.min.js", "text/javascript"],
+  "/assets/vendor/distill.template.v2.js": ["assets/vendor/distill.template.v2.js", "text/javascript"],
   "/assets/login.js": ["assets/login.js", "text/javascript"],
   "/styles/blog.css": ["assets/styles/blog.css", "text/css"],
   "/styles/editor.css": ["assets/styles/editor.css", "text/css"],
   "/favicon.svg": ["assets/favicon.svg", "image/svg+xml"],
 };
 
-export async function startEditorHarness({ shots = null } = {}) {
+// `editorScript` rewrites the editor's own code before it is served, so a
+// check can run its control against a deliberately broken editor.
+export async function startEditorHarness({ shots = null, editorScript = (text) => text } = {}) {
   let SITE = null;
 
   // ---- the backend --------------------------------------------------------------
@@ -65,6 +74,7 @@ export async function startEditorHarness({ shots = null } = {}) {
     },
     signPut: async (key) => `${SITE}/local-upload/${Buffer.from(key).toString("base64url")}`,
     signGet: async (key) => `${SITE}/local-download/${Buffer.from(key).toString("base64url")}`,
+    runSecret: "verify-editor-run",
   });
   process.env.ADMIN_PASSWORD_HASH = await hashPassword(PASSWORD, { N: 1024, r: 8, p: 1, keyLength: 32 });
 
@@ -79,8 +89,20 @@ export async function startEditorHarness({ shots = null } = {}) {
   }
 
   const serverErrors = [];
+  // Every request, with whether it carried a cookie and which origin sent it:
+  // the oracle for what a sandboxed frame could and could not do. `/hit/`
+  // paths are beacons a page under test sends, answered and only recorded.
+  const requests = [];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://local");
+    requests.push({
+      path: url.pathname, search: url.search, method: req.method,
+      origin: req.headers.origin ?? null, cookie: Boolean(req.headers.cookie),
+    });
+    if (url.pathname.startsWith("/hit/")) {
+      res.writeHead(204);
+      return res.end();
+    }
     // The one piece of Vercel's response helpers the handlers use.
     res.status = (code) => { res.statusCode = code; return res; };
     try {
@@ -113,7 +135,8 @@ export async function startEditorHarness({ shots = null } = {}) {
       const asset = STATIC[url.pathname];
       if (asset && fs.existsSync(path.join(ROOT, asset[0]))) {
         res.writeHead(200, { "content-type": asset[1] });
-        return res.end(fs.readFileSync(path.join(ROOT, asset[0])));
+        const text = fs.readFileSync(path.join(ROOT, asset[0]));
+        return res.end(url.pathname === "/assets/editor.js" ? editorScript(text.toString("utf8")) : text);
       }
       res.writeHead(404);
       res.end();
@@ -300,6 +323,8 @@ export async function startEditorHarness({ shots = null } = {}) {
           type: "keyUp", key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode, modifiers,
         });
       },
+      /** The next time this page emits a DevTools event, such as a file chooser opening. */
+      waitFor: (method, timeout) => waitFor(sessionId, method, timeout),
       /** Real typed text, one input event per call, as an IME or keyboard would send it. */
       insertText: (text) => call("Input.insertText", { text }),
       async screenshot(name) {
@@ -344,7 +369,7 @@ export async function startEditorHarness({ shots = null } = {}) {
   }
 
   return {
-    SITE, store, sessions, hooks, publisher, deployment, finishBuild, work, logLines,
+    SITE, store, sessions, hooks, publisher, deployment, finishBuild, work, logLines, requests,
     openPage, check, results, scriptErrors, serverErrors, shutdown, finish,
   };
 }

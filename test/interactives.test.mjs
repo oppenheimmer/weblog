@@ -226,10 +226,13 @@ test("the page loads vendored libraries from exactly the table publication check
   // list, and assets/blog.js loads what it does. A name in one and not the
   // other either publishes a figure the page cannot load, or loads what
   // publication would have refused.
-  const script = fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8");
-  const table = /var VENDORED_SOURCES = (\{[^}]*\})/.exec(script);
-  assert.ok(table, "assets/blog.js has no vendored-library table");
-  assert.deepEqual(JSON.parse(table[1].replace(/(\w+):/g, '"$1":')), VENDORED_SOURCES);
+  // assets/preview-run.js loads figures for Run preview and keeps its own copy.
+  for (const name of ["blog.js", "preview-run.js"]) {
+    const script = fs.readFileSync(path.join(ROOT, "assets", name), "utf8");
+    const table = /var VENDORED_SOURCES = (\{[^}]*\})/.exec(script);
+    assert.ok(table, `assets/${name} has no vendored-library table`);
+    assert.deepEqual(JSON.parse(table[1].replace(/(\w+):/g, '"$1":')), VENDORED_SOURCES, name);
+  }
 });
 
 test("the vendored d3 is the upstream 7.9.0 build, byte for byte, with its licence", () => {

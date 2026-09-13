@@ -228,6 +228,10 @@
 }
 .attachment-actions { display: flex; gap: 6px; margin-left: auto; }
 .attach-status { margin: 8px 0 0; font-size: 0.85rem; color: #5d7183; min-height: 1.2em; }
+.interactives .attachments-head { justify-content: flex-start; }
+.interactives .attachments-title { margin-right: auto; }
+.attachments-hint code { font-size: 0.78rem; }
+#preview-run[aria-pressed="true"] { background: #12344d; color: #fff; border-color: #12344d; }
 .button-small { padding: 4px 10px; font-size: 0.82rem; }
 .field-body textarea.drop-target { outline: 2px dashed #12344d; outline-offset: 2px; }
 .relink {

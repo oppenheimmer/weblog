@@ -648,6 +648,45 @@ test("tripwire: the editor's preview frame is sandboxed with no permissions at a
   assert.match(frame[0], /referrerpolicy="no-referrer"/, "preview requests would leak the editor URL");
 });
 
+test("tripwire: running interactives gives the preview frame scripts, never an origin", () => {
+  // Run preview (§3.6) is the one time the frame runs code. Without an origin
+  // of its own, a figure has the previewed article and a lab its production
+  // sandbox inside it, and neither can read the editor or send its session.
+  // allow-same-origin beside allow-scripts would hand both the editor outright.
+  const script = fs.readFileSync(path.join(ROOT, "assets", "editor.js"), "utf8");
+  const grants = [...script.matchAll(/previewFrame\.setAttribute\("sandbox",\s*([^)]*)\)/g)].map((m) => m[1]);
+  assert.ok(grants.length > 0, "the editor no longer sets the preview frame's sandbox, so this pins nothing");
+  for (const grant of grants) {
+    const tokens = [...grant.matchAll(/"([^"]*)"/g)].flatMap((m) => m[1].split(/\s+/)).filter(Boolean);
+    assert.deepEqual([...new Set(tokens)].filter((token) => token !== "allow-scripts"), [],
+      `the preview frame is granted more than scripts: ${grant}`);
+  }
+  assert.ok(!/allow-same-origin|allow-top-navigation|allow-popups|allow-forms/.test(script),
+    "the editor grants a frame more than scripts somewhere");
+});
+
+test("tripwire: Run preview imports a figure only from a grant, and only on a post page", () => {
+  const script = fs.readFileSync(path.join(ROOT, "assets", "preview-run.js"), "utf8");
+  assert.match(script, /indexOf\("\/api\/preview\/run\/"\)\s*!==\s*0/,
+    "the Run figure loader imports whatever address it is given");
+  assert.match(script, /classList\.contains\("post-page"\)/);
+  // And the published loader still refuses a grant: a figure on a real page
+  // imports only what publishing put under /assets/figures/.
+  assert.ok(!fs.readFileSync(path.join(ROOT, "assets", "blog.js"), "utf8").includes("/api/preview/run/"),
+    "the published figure loader was taught to import unpublished bundles");
+});
+
+test("tripwire: a Run preview address reaches the preview function, and the build ships its loader", () => {
+  const config = JSON.parse(fs.readFileSync(path.join(ROOT, "vercel.json"), "utf8"));
+  const rewrites = Object.fromEntries(config.rewrites.map((rule) => [rule.source, rule.destination]));
+  assert.equal(rewrites["/api/preview/run/:grant/"], "/api/preview?grant=:grant",
+    "a lab's entry, served at its run directory, would not reach the preview function");
+  assert.equal(rewrites["/api/preview/run/:grant/:file*"], "/api/preview?grant=:grant&file=:file*",
+    "a bundle's relative files would not reach the preview function");
+  assert.match(fs.readFileSync(path.join(ROOT, "build.mjs"), "utf8"), /"preview-run\.js"/,
+    "the Run figure loader is not copied into the deployment");
+});
+
 /** The inline script a listing page runs in its head to pick a view. */
 async function viewScript() {
   const { listPage } = await import("../lib/templates.mjs");

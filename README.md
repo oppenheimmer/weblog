@@ -216,9 +216,21 @@ path such as `/demos/<post-slug>/double-pendulum/<revision>/`; every relative fi
 extra HTML pages and files outside the folder are refused, and a fallback is checked against a small allowlist
 rather than cleaned.
 
-The ordinary editor preview remains script-free, and the editor cannot attach a bundle yet: a deliberate **Run
-interactive preview** action and a bundle panel are still to come. Listings, printing, no-JavaScript browsers,
-loading and failures show the required fallback instead.
+In the editor, **Interactives** has **Attach lab folder** and **Attach figure folder**. Choose the folder itself:
+the browser hashes each file, the files go straight to R2 on signed URLs, and the server rehashes every one before
+the bundle exists. Hidden files such as `.DS_Store` are left out, an optional `interactive.json` is read as the
+staging push reads it, and a fallback the page could not show is refused while attaching. The reference is
+inserted on its own line, or, when the body already names the folder (`::demo[double-pendulum]`), written in
+place of that name. Each row offers **Insert**, **Replace** (a new revision under the same public name) and
+**Remove**. Interactives are for Markdown posts; a LaTeX post cannot name one yet.
+
+The ordinary preview stays script-free, and shows each interactive's fallback. **Run interactives**, in the
+preview, runs them: labs in their production sandbox, and figures as page code of the previewed article. The
+preview frame then has scripts but still no origin of its own, so neither can reach the editor, its storage or
+the session, and nothing runs until the button is pressed. While running, typing does not restart them; **Stop
+interactives** shows the edits. Unpublished bundles are served for this through the preview function on grants
+that expire after 30 minutes. Listings, printing, no-JavaScript browsers, loading and failures on the public site
+show the required fallback instead.
 
 Every generated public page carries a CSP. Article figures may import modules
 and fetch data from this site, but third-party script and data connections are
@@ -228,9 +240,9 @@ self-contained rather than merely promise to be.
 
 #### Pushing a post with its interactives
 
-Interactive folders are content, not engine code. They live in R2, never in Git. Today they reach a post through
-the **staging push**, a second front end to the same publication service the editor uses. Stage one post per
-folder, naming each interactive by its folder:
+Interactive folders are content, not engine code. They live in R2, never in Git. Besides the editor, they reach
+a post through the **staging push**, a second front end to the same publication service the editor uses, for a
+post written on disk. Stage one post per folder, naming each interactive by its folder:
 
 ```text
 staging/double-pendulum/
@@ -344,7 +356,11 @@ node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no 
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
 node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
+node scripts/verify-editor-interactives.mjs  # attach, replace and remove folders; Run preview stays out of the editor
 ```
+
+After deploying, `node scripts/verify-live-bundles.mjs` reads the live site anonymously: Run preview addresses
+reach the preview function, and every published lab and figure carries its sandbox and read headers.
 
 `.github/workflows/ci.yml` runs the suite and a credential-free build on every
 push and pull request, and every browser check on `main`; `audit.yml`
@@ -399,12 +415,12 @@ dist/
   feed.xml  sitemap.xml  robots.txt  404.html  favicon.svg
   build-manifest.json     # which post revisions this build contains
   styles/                 # blog.css, editor.css, katex.min.css, fonts/
-  assets/                 # blog.js, editor.js, login.js, vendor/
+  assets/                 # blog.js, editor.js, login.js, preview-run.js, vendor/
 ```
 
-When interactive publishing lands, the same build will also verify interactive manifests and emit immutable
-figure assets below `/assets/figures/<post-slug>/…` and sealed lab folders below
-`/demos/<post-slug>/…`. No runtime server will read R2 for a public post.
+The same build verifies interactive manifests and emits immutable figure assets below
+`/assets/figures/<post-slug>/…` and sealed lab folders below `/demos/<post-slug>/…`. No runtime server reads R2
+for a public post.
 
 ---
 
@@ -613,6 +629,14 @@ to opt in.
 - Calling the deploy hook again while a build of the same commit is running
   cancels the earlier build, which is what collapses a burst of publishes into
   one deployment.
+- Run preview files are served by the preview function at
+  `/api/preview/run/<grant>/<file>`, which `vercel.json` rewrites to it. A
+  sandboxed frame sends no session cookie, so the grant is the permission: an
+  HMAC over one verified revision of one interactive, for 30 minutes. Each
+  response carries the lab path's own policy — `sandbox allow-scripts`, readable
+  by the frame's opaque origin, `no-store` — and serves only files the manifest
+  declares, HTML only as a lab's entry at its directory. Logs record the path
+  with the grant removed.
 
 *Deployment findings worth keeping:*
 

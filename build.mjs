@@ -173,7 +173,7 @@ async function build() {
   // Per-post embed assets and vendored libraries (e.g. distill template).
   copyInto(path.join(ASSETS_DIR, "posts"), "assets/posts");
   copyInto(path.join(ASSETS_DIR, "vendor"), "assets/vendor");
-  for (const script of ["blog.js", "editor.js", "login.js"]) {
+  for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js"]) {
     const file = path.join(ASSETS_DIR, script);
     if (fs.existsSync(file)) write(path.join("assets", script), fs.readFileSync(file));
   }
