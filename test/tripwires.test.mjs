@@ -890,3 +890,17 @@ test("tripwire: a description does not keep the punctuation of maths it drops", 
     assert.match(text, expected);
   }
 });
+
+test("tripwire: a description keeps what the author escaped", () => {
+  // Markdown renders \$ as a dollar and \* as an asterisk, not as maths or
+  // emphasis. Stripping maths and markup before reading escapes turned
+  // "\$\$a+b\$\$" into "\ a+b\" in the meta description.
+  const cases = [
+    ["Escaped dollars: \\$\\$a+b\\$\\$ stay text.", "Escaped dollars: $$a+b$$ stay text."],
+    ["It costs \\$5, or \\$6 with $x$ extra.", "It costs $5, or $6 with extra."],
+    ["A literal \\*star\\* and \\_underscore\\_, then \\\\ a backslash.", "A literal *star* and _underscore_, then \\ a backslash."],
+  ];
+  for (const [source, expected] of cases) {
+    assert.equal(toPlainText(source), expected);
+  }
+});
