@@ -93,8 +93,13 @@ that instead. From the same panel:
 
 A published post keeps its slug: publishing it under another is refused until
 it is unpublished. Discarding a draft is refused while its post is published,
-because the draft and the published copy live under the same post id. Every
-post on the site is listed, including one with no draft.
+because the draft and the published copy live under the same post id.
+
+The sidebar lists a post by what Publish and Unpublish decided. **On the site**
+lists published posts, including one with no draft. **Drafts** lists what the
+site does not show: posts never published, unpublished posts (marked *coming
+off the site*, then *unpublished*), and saved changes to a published post
+(marked *changes not on the site*, and so in both lists).
 
 ### Markdown body
 

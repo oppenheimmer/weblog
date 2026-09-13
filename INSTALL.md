@@ -568,7 +568,7 @@ itself.
 | The site builds but is **empty** | No R2 credentials in that environment, or nothing published. A credential-less build produces an empty site by design; check the build log's `content:` line. |
 | Build aborts: *Media error* | A published revision names an image that is missing from R2 or whose bytes no longer match its recorded hash. The build refuses rather than shipping a broken page. |
 | Build aborts: *Content error* | A post failed validation — a missing title or date, an unparseable date, a reserved or duplicate slug. The message names the post. |
-| A post doesn't appear | It was never published (a saved draft is not published), or it is unpublished. Check **On the site** in the editor, and `/build-manifest.json`. |
+| A post doesn't appear | It was never published (a saved draft is not published), or it is unpublished. **On the site** in the editor lists published posts; an unpublished one is under **Drafts**, marked *unpublished*. Check `/build-manifest.json` too. |
 | Publish succeeds but the post is not live | The rebuild has not landed, or the deploy hook is unset or failed. The panel distinguishes them; **Rebuild site** re-fires the hook. |
 | Attachment upload fails immediately | The R2 CORS rule is missing, or does not name the exact origin the editor is served from (step 2). |
 | Publishing under a new slug is refused | A published post's slug is fixed. Unpublish it first, or keep the slug. |
