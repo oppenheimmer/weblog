@@ -69,6 +69,32 @@ test("allowed origins are matched exactly, not by suffix", () => {
   }
 });
 
+test("EDITOR_ORIGIN adds to the production site origin", () => {
+  const before = {
+    site: process.env.SITE_URL,
+    editor: process.env.EDITOR_ORIGIN,
+    vercel: process.env.VERCEL_ENV,
+  };
+  try {
+    delete process.env.SITE_URL;
+    process.env.EDITOR_ORIGIN = "https://editor.example/";
+    process.env.VERCEL_ENV = "production";
+    assert.deepEqual(allowedOrigins(), [
+      "https://blog.souravmishra.net",
+      "https://editor.example",
+    ]);
+  } finally {
+    for (const [name, value] of [
+      ["SITE_URL", before.site],
+      ["EDITOR_ORIGIN", before.editor],
+      ["VERCEL_ENV", before.vercel],
+    ]) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 test("a mutating request with no Origin header is refused", () => {
   assert.equal(checkOrigin({ headers: {} }).ok, false);
 });
