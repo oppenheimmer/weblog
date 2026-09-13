@@ -284,6 +284,31 @@ try {
     return (/LaTeX post cannot include an interactive/.test(error) && !chooserOpened) || { error, chooserOpened };
   });
 
+  console.log("\nDiscarding the post:");
+  const postId = await page.eval(`(() => {
+    const format = document.getElementById("format");
+    format.value = "markdown";
+    format.dispatchEvent(new Event("input", { bubbles: true }));
+    return [...document.querySelectorAll("#draft-list button")].length;
+  })()`) && requests.map((r) => /^\/api\/drafts\/(p_[0-9a-f]{16})\/$/.exec(r.path)?.[1]).filter(Boolean).at(-1);
+  const named = async () => (await harness.store.listAll("")).map(({ key }) => key).filter((key) => key.includes(postId));
+  const before = postId ? (await named()).length : 0;
+  await page.click("#discard");
+  await check("the open preview goes blank, rather than keeping a page template", async () => {
+    const frame = await page.until(`document.getElementById("title").value === "" &&
+      document.getElementById("preview-state").textContent === "nothing to preview yet" && ({
+        srcdoc: document.getElementById("preview-frame").getAttribute("srcdoc"),
+        sandbox: document.getElementById("preview-frame").getAttribute("sandbox"),
+        rows: document.querySelectorAll("#interactive-list .attachment").length,
+      })`);
+    return (frame.srcdoc === "" && frame.sandbox === "" && frame.rows === 0) || frame;
+  });
+  await check("nothing in the bucket names the discarded post", async () => {
+    const left = await named();
+    // Asserted present first, so an empty fixture cannot pass for a clean discard.
+    return (before > 0 && left.length === 0) || { postId, before, left };
+  });
+
   await check("no script error was thrown", () => scriptErrors.length === 0 || scriptErrors);
   await check("no request failed inside the server", () => serverErrors.length === 0 || serverErrors);
 } finally {

@@ -463,19 +463,44 @@ test("a job inside its window is kept even when it can answer for nothing", asyn
   assert.ok(RETENTION.publicationJobMs > 2 * DAY);
 });
 
-test("discarding a post leaves its jobs to the retention window, not for ever", async () => {
-  // The gap this closes: a job id is derived from post and revision rather
-  // than nested under either, so deleting a post's prefixes cannot reach one.
+test("discarding a post deletes its publication jobs, and no other post's", async () => {
+  // A job id is derived from post and revision rather than nested under either,
+  // so deleting a post's prefixes cannot reach one. Found on production: a
+  // discarded post's job was the one object left naming it.
+  const { store, publisher, drafts } = harness();
+  const gone = await drafts.create({ title: "Gone", body: "text" });
+  const kept = await drafts.create({ title: "Kept", body: "text" });
+  await publisher.publish(complete({ postId: gone.draft.postId, slug: "gone" }));
+  await publisher.publish(complete({ postId: kept.draft.postId, slug: "kept" }));
+  await publisher.unpublish(gone.draft.postId);
+  await publisher.unpublish(kept.draft.postId);
+  assert.equal((await store.listAll("publications/")).length, 2, "the fixture has no jobs to discard");
+
+  await drafts.remove(gone.draft.postId);
+  const left = await Promise.all((await store.listAll("publications/")).map(async ({ key }) =>
+    (await store.getJson(key)).data.postId));
+  assert.deepEqual(left, [kept.draft.postId]);
+  assert.ok(!(await store.listAll("")).some(({ key }) => key.includes(gone.draft.postId)),
+    "something naming the discarded post survived its discard");
+});
+
+test("a job whose post is gone goes after the age floor, not the job window", async () => {
+  // A discard interrupted between deleting the post and its jobs, or one from
+  // before discard deleted jobs at all: the post no longer exists, so its job
+  // records nothing anyone can return to.
   const { store, publisher, drafts, client } = harness();
   const created = await drafts.create({ title: "A post", body: "text" });
   await publisher.publish(complete({ postId: created.draft.postId, slug: "gone" }));
   await publisher.unpublish(created.draft.postId);
   await deletePostObjects(store, created.draft.postId, { apply: true });
-
   assert.equal((await store.listAll("publications/")).length, 1,
-    "deleting a post reached a shared record, which scoping forbids");
+    "deleting a post's prefixes reached a shared record, which scoping forbids");
 
-  backdate(client, "publications/", 400 * DAY);
+  backdate(client, "publications/", RETENTION.minAgeMs / 2);
+  await collectGarbage(store, { apply: true });
+  assert.equal((await store.listAll("publications/")).length, 1, "a job younger than the age floor was swept");
+
+  backdate(client, "publications/", RETENTION.minAgeMs + 60_000);
   await collectGarbage(store, { apply: true });
   assert.deepEqual((await store.listAll("publications/")).map(({ key }) => key), []);
 });

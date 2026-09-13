@@ -1136,9 +1136,24 @@ async function refreshPreview({ force = false } = {}) {
     if (!force && key === state.preview.lastKey) return;
 
     state.preview.controller?.abort();
+    const seq = ++state.preview.seq;
+
+    // A new post with nothing written has nothing to preview. Rendering it
+    // painted the page template — "Untitled" and today's date — and a discard,
+    // which opens exactly such a post, left that in the pane.
+    const form = readForm();
+    if (!state.postId && ![form.title, form.slug, form.description, form.body].some((text) => text.trim()) &&
+        !form.tags.length) {
+        els.previewFrame.setAttribute("sandbox", "");
+        els.previewFrame.srcdoc = "";
+        showDiagnostics([]);
+        state.preview.lastKey = key;
+        setPreviewState("nothing to preview yet");
+        return;
+    }
+
     const controller = new AbortController();
     state.preview.controller = controller;
-    const seq = ++state.preview.seq;
     const run = state.preview.run;
     setPreviewState(run ? "starting interactives…" : "rendering…");
 
