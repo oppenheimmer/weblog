@@ -29,7 +29,12 @@
         vendored[name] = new Promise(function (resolve, reject) {
             var tag = document.createElement("script");
             tag.src = VENDORED_SOURCES[name];
-            tag.onload = resolve;
+            tag.onload = function () {
+                // As on a published page (assets/blog.js): Distill scans no
+                // text for $$, and <d-math> still typesets.
+                if (name === "distill" && window.DMath) window.DMath.katexOptions = {};
+                resolve();
+            };
             tag.onerror = function () { reject(new Error("could not load " + name)); };
             document.head.appendChild(tag);
         });

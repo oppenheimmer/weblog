@@ -17,6 +17,8 @@ import { browserVersion, cannotRun, startPageReader } from "./chromium.mjs";
 import { listPage, postPage } from "../lib/templates.mjs";
 import { headersFor, readRouting } from "../lib/routing.mjs";
 import { DISTILL_STYLE_HASHES } from "../lib/distill.mjs";
+import { loadPost } from "../lib/content.mjs";
+import { INTERACTIVE_FENCE } from "../lib/interactives.mjs";
 
 const ENGINE = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
 const KATEX = path.join(ENGINE, "node_modules", "katex", "dist");
@@ -90,6 +92,98 @@ hit("distill/report/" + encodeURIComponent(JSON.stringify({
   outsiders,
 })));
 `;
+
+// A figure loading Distill must leave the blog's page as it was. The page is a
+// real rendered post — the Markdown fixture corpus's kitchen sink, a line of
+// escaped dollars, the generic elements Distill's page style names — and a
+// figure that creates <d-math> and a slider, loaded by the real assets/blog.js
+// with the real blog.css. The probe records every computed style outside the
+// figure, removes Distill's page style, and records them again: the blog's own
+// look is what remains, so the two must be equal.
+let lookRun = false;
+let lookControl = null; // "css": blog.css without its Distill overrides; "delimiters": blog.js scanning for $$
+const LOOK_FIGURE = "/assets/figures/distill-look/look-figure/iv_00000000000000e1/main.mjs";
+const lookPost = (() => {
+  const source = fs.readFileSync(path.join(ENGINE, "test", "fixtures", "content", "posts", "2026-07-01-markdown-kitchen-sink.md"), "utf8");
+  const fence = `\`\`\`${INTERACTIVE_FENCE}\n${JSON.stringify({
+    kind: "figure", name: "look-figure", src: LOOK_FIGURE, dependencies: ["distill"], fallback: "<p>A still of the figure.</p>",
+  })}\n\`\`\``;
+  const post = loadPost(`${source}\nEscaped dollars: \\$\\$a+b\\$\\$ stay text.\n\n${fence}\n`, { sourceName: "distill-look.md" });
+  // Elements Distill's page style names that Markdown does not produce, as a
+  // LaTeX post or an interactive's fallback can.
+  post.html += `<p>A note<sup>2</sup> on H<sub>2</sub>O.</p>
+<figure><img src="/images/none.png" alt="An image" width="40" height="20"><figcaption>A caption with <a href="/">a link</a> and <b>bold</b>.</figcaption></figure>
+<aside><p>An aside.</p></aside>`;
+  return { ...post, slug: "distill-look", scripts: ["/assets/posts/distill-look-probe.mjs"] };
+})();
+const LOOK_FIGURE_MODULE = `
+export function mount(root) {
+  const inline = document.createElement("d-math");
+  inline.textContent = "x^2 + y^2";
+  const block = document.createElement("d-math");
+  block.setAttribute("block", "");
+  block.textContent = "\\\\int_0^1 x\\\\,dx";
+  const slider = document.createElement("d-slider");
+  for (const [name, value] of [["min", "0"], ["max", "1"], ["step", "0.1"], ["value", "0.5"]]) slider.setAttribute(name, value);
+  slider.style.width = "200px";
+  const line = document.createElement("p");
+  line.append("Inline ", inline);
+  root.replaceChildren(line, block, slider);
+}`;
+const LOOK_PROBE = `
+const hit = (p) => { new Image().src = "/hit/" + p; };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const figure = document.querySelector('figure[data-interactive="figure"]');
+let ready = false;
+for (let i = 0; i < 100 && !ready; i++) {
+  const math = document.querySelector(".interactive-root d-math");
+  ready = Boolean(figure && figure.classList.contains("interactive--live") && typeof katex === "object" &&
+    math && math.shadowRoot && math.shadowRoot.querySelector(".katex") && document.getElementById("distill-prerendered-styles"));
+  if (!ready) await sleep(100);
+}
+await sleep(500);
+const elements = [document.documentElement, document.body, ...document.body.querySelectorAll("*")]
+  .filter((el) => !el.closest(".interactive-root") && !el.tagName.startsWith("D-") && !/^(SCRIPT|STYLE|LINK|META|TITLE|TEMPLATE)$/.test(el.tagName));
+const nameOf = (el) => el.tagName.toLowerCase() + (typeof el.className === "string" && el.className.trim()
+  ? "." + el.className.trim().split(/\\s+/).slice(0, 2).join(".") : "");
+const snapshot = () => elements.map((el) => {
+  const style = getComputedStyle(el);
+  const values = {};
+  for (let i = 0; i < style.length; i++) values[style[i]] = style.getPropertyValue(style[i]);
+  return values;
+});
+const withDistill = snapshot();
+const literal = [...document.querySelectorAll(".prose p")].find((p) => p.textContent.includes("Escaped dollars"));
+const slider = document.querySelector(".interactive-root d-slider");
+const blockMath = document.querySelector(".interactive-root d-math[block]");
+const report = {
+  ready,
+  literal: literal ? { text: literal.textContent.trim(), typeset: Boolean(literal.querySelector(".katex, d-math")) } : null,
+  slider: slider ? Math.round(slider.getBoundingClientRect().width) : 0,
+  blockMath: blockMath ? getComputedStyle(blockMath).display : null,
+};
+document.getElementById("distill-prerendered-styles")?.remove();
+// Distill also appends KaTeX's stylesheet to the end of the head. The page has
+// maths, so the first link to it is the site's own and any later one Distill's.
+for (const link of [...document.querySelectorAll('link[rel="stylesheet"][href$="katex.min.css"]')].slice(1)) link.remove();
+await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+const blogAlone = snapshot();
+// Sizes and origins follow from other changes, so the sample names causes first.
+const DERIVED = /^(block-size|inline-size|height|width|perspective-origin|transform-origin)$/;
+const diffs = [];
+elements.forEach((el, i) => {
+  for (const property in blogAlone[i]) {
+    if (withDistill[i][property] !== blogAlone[i][property]) {
+      diffs.push({ derived: DERIVED.test(property), text: nameOf(el) + " " + property + ": " + withDistill[i][property] + " with Distill, " + blogAlone[i][property] + " without" });
+    }
+  }
+});
+const causes = [...new Set(diffs.filter((d) => !d.derived).map((d) => d.text))];
+hit("look/report/" + encodeURIComponent(JSON.stringify({
+  ...report, elements: elements.length, diffs: diffs.length,
+  sample: (causes.length ? causes : diffs.map((d) => d.text)).slice(0, 40),
+})));
+`;
 let siteOrigin = "";
 const routing = readRouting(JSON.parse(fs.readFileSync(
   path.join(path.dirname(new URL(import.meta.url).pathname), "..", "vercel.json"),
@@ -137,6 +231,26 @@ const site = http.createServer((req, res) => {
       scripts: ["/assets/posts/distill-probe.mjs"],
     }), { "content-security-policy": policy });
   }
+  if (pathname === "/distill-look/") {
+    return send("text/html; charset=utf-8", postPage(lookPost),
+      { "content-security-policy": headersFor(routing, pathname).get("content-security-policy") });
+  }
+  if (pathname === LOOK_FIGURE) return send("text/javascript", LOOK_FIGURE_MODULE);
+  if (pathname === "/assets/posts/distill-look-probe.mjs") return send("text/javascript", LOOK_PROBE);
+  if (lookRun && pathname === "/styles/blog.css") {
+    const css = fs.readFileSync(path.join(ENGINE, "assets", "styles", "blog.css"), "utf8");
+    if (lookControl !== "css") return send("text/css", css);
+    const stripped = css.replace(/\/\* Distill \(CLAUDE\.md §3\.6\)[\s\S]*?\/\* End of the Distill overrides\. \*\//, "");
+    if (stripped === css) cannotRun("the control could not find blog.css's Distill overrides to remove");
+    return send("text/css", stripped);
+  }
+  if (lookRun && pathname === "/assets/blog.js") {
+    const script = fs.readFileSync(path.join(ENGINE, "assets", "blog.js"), "utf8");
+    if (lookControl !== "delimiters") return send("text/javascript", script);
+    const scanning = script.replace(/window\.DMath\.katexOptions = \{\};/, "");
+    if (scanning === script) cannotRun("the control could not find where blog.js turns off Distill's $$ scanning");
+    return send("text/javascript", scanning);
+  }
   if (pathname === "/assets/blog.js") {
     return send("text/javascript", `new Image().src = "/hit/head/" +
       (document.documentElement.classList.contains("js") ? "js" : "no-js") + "-" +
@@ -173,12 +287,12 @@ async function quiet() {
     await sleep(150);
   }
 }
-async function run(pathname, isControl = false, settle = quiet) {
+async function run(pathname, isControl = false, settle = quiet, options = {}) {
   control = isControl;
   siteHits.length = 0;
   outsideHits.length = 0;
   try {
-    await reader.read(`${siteOrigin}${pathname}`, { settle });
+    await reader.read(`${siteOrigin}${pathname}`, { settle, ...options });
   } catch (err) {
     cannotRun("the public CSP probe could not load", err.message);
   }
@@ -244,6 +358,47 @@ distillControl = false;
 console.log("\nControl, the same page without the Distill hashes:");
 check("the same blocks are refused and the slider has no size — so the configured run was measured",
   withoutHashes && withoutHashes.refused > 0 && withoutHashes.slider === 0, JSON.stringify(withoutHashes));
+
+console.log("\nA post whose figure loads Distill keeps the blog's look:");
+// The probe tells the site's KaTeX stylesheet from the one Distill appends by
+// order, which holds only when the page links its own.
+if (!lookPost.math) cannotRun("the Distill look page has no maths, so it links no KaTeX stylesheet of its own");
+const lookReport = async (options, controlKind = null) => {
+  lookRun = true;
+  lookControl = controlKind;
+  const settle = async () => {
+    for (let i = 0; i < 100 && !siteHits.some((p) => p.startsWith("/hit/look/report/")); i++) await sleep(150);
+  };
+  const hits = (await run("/distill-look/", false, settle, { reducedMotion: true, ...options })).site;
+  lookRun = false;
+  lookControl = null;
+  const found = hits.find((p) => p.startsWith("/hit/look/report/"));
+  const result = found ? JSON.parse(decodeURIComponent(found.slice("/hit/look/report/".length))) : null;
+  // Distill loaded, its maths typeset and its page style present are what make
+  // the comparison mean anything; none of them is the claim being checked.
+  if (!result?.ready) cannotRun("the Distill figure did not load and typeset", JSON.stringify(result) ?? hits.join(", "));
+  return result;
+};
+for (const width of [390, 1280]) {
+  const look = await lookReport({ width });
+  check(`at ${width} px, nothing outside the figure looks different for Distill's page style (${look.elements} elements)`,
+    look.diffs === 0, `${look.diffs} differences: ${look.sample.join("; ")}`);
+  check(`at ${width} px, escaped $$ in the article stays text`,
+    look.literal && !look.literal.typeset && look.literal.text.includes("$$a+b$$"), JSON.stringify(look.literal));
+  check(`at ${width} px, the figure's slider and block maths still lay out`,
+    look.slider > 0 && look.blockMath === "block", JSON.stringify(look));
+}
+const printed = await lookReport({ width: 1280, print: true });
+check(`printed, nothing outside the figure looks different either (${printed.elements} elements)`,
+  printed.diffs === 0, `${printed.diffs} differences: ${printed.sample.join("; ")}`);
+
+console.log("\nControls, the same page:");
+const unstyled = await lookReport({ width: 390 }, "css");
+check("without blog.css's Distill overrides, the blog's page changes — so the comparison was measured",
+  unstyled.diffs > 0 && unstyled.sample.some((d) => /^html(\.[\w-]+)* font-size: 14px/.test(d)), `${unstyled.diffs}: ${unstyled.sample.join("; ")}`);
+const scanned = await lookReport({ width: 1280 }, "delimiters");
+check("with Distill's $$ scanning left on, the escaped dollars are typeset — so the text check was measured",
+  scanned.literal?.typeset === true, JSON.stringify(scanned.literal));
 
 await reader.close();
 site.close();

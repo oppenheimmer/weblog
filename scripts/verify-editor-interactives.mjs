@@ -82,6 +82,16 @@ const CHART_DIR = writeFolder(path.join(work, "folders", "chart"), {
     '  slider.style.width = "200px";\n' +
     '  root.append(slider);\n' +
     '  setTimeout(() => hit("figure-distill-slider/" + (slider.getBoundingClientRect().height > 0 ? "sized" : "unsized")), 1500);\n' +
+    // Once a <d-math> is typeset, Distill would typeset any $$…$$ left as
+    // text in the article; the loader turns that off (assets/preview-run.js).
+    '  const math = document.createElement("d-math");\n' +
+    '  math.textContent = "x^2";\n' +
+    '  root.append(math);\n' +
+    '  (function wait(tries) {\n' +
+    '    if (!math.shadowRoot?.querySelector(".katex")) return tries ? setTimeout(() => wait(tries - 1), 100) : hit("figure-dollars/no-math");\n' +
+    '    const line = [...document.querySelectorAll(".prose p")].find((p) => p.textContent.includes("Escaped dollars"));\n' +
+    '    hit("figure-dollars/" + (!line ? "no-line" : line.querySelector(".katex, d-math") ? "typeset" : "text"));\n' +
+    '  })(80);\n' +
     "}\n",
   "interactive.json": '{"dependencies": ["d3", "distill"]}\n',
   "fallback.html": "<p>The chart, standing still.</p>\n",
@@ -133,8 +143,12 @@ try {
   console.log("\nAttaching folders:");
   await page.type("#title", "Orbits");
   await page.type("#slug", "orbits");
+  // Written, so the lede above the article does not grow with the body: the
+  // lab's frame loads lazily, and a longer lede once pushed it past the
+  // distance at which the preview pane's frame would ever load it.
+  await page.type("#description", "Two interactives.");
   // Written the way a staged post names its folder.
-  await page.type("#body", "An introduction.\n\n::demo[lab]\n\nA closing line.");
+  await page.type("#body", "An introduction.\n\n::demo[lab]\n\nEscaped dollars: \\$\\$a+b\\$\\$ stay text.\n\nA closing line.");
   await page.until(`/^autosaved · v1$/.test(document.getElementById("save-state").textContent)`);
 
   await chooseFolder(() => page.click("#attach-lab"), LAB_DIR);
@@ -190,6 +204,8 @@ try {
     untilHits(["figure-mounted/7.9.0", "figure-article/Orbits"]));
   await check("a Distill component in it is laid out, as it would be on the post page", async () =>
     untilHits(["figure-distill-slider/sized"]));
+  await check("once its <d-math> is typeset, escaped dollars in the article stay text, as on the post page", async () =>
+    untilHits(["figure-dollars/text"]));
   await check("neither can reach the editor's document or storage, nor read a draft", async () => {
     const settled = await untilHits(["lab-editor/denied", "figure-editor/denied", "figure-storage/denied",
       "lab-drafts/refused", "figure-drafts/refused"]);

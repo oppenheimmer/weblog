@@ -130,7 +130,15 @@
         vendored[name] = new Promise(function (resolve, reject) {
             var tag = document.createElement("script");
             tag.src = VENDORED_SOURCES[name];
-            tag.onload = resolve;
+            tag.onload = function () {
+                // Once a <d-math> appears, Distill typesets every $$…$$ left
+                // as text anywhere in the page. The article's maths is already
+                // rendered when the site builds, so what it would find is
+                // dollars the author escaped. Without delimiters it scans
+                // nothing, and <d-math> still typesets (CLAUDE.md §3.6).
+                if (name === "distill" && window.DMath) window.DMath.katexOptions = {};
+                resolve();
+            };
             tag.onerror = function () { reject(new Error("could not load " + name)); };
             document.head.appendChild(tag);
         });

@@ -146,6 +146,8 @@ A Markdown post can include two kinds of interactive, each an uploaded folder:
   `d3`, both served from this site. Outside scripts and data are refused.
 - **Maths** in the post body is always rendered by KaTeX when the site builds.
   Distill's `<d-math>` is for maths a figure creates or changes as it runs.
+- **Distill stays inside its figure.** The page around it keeps the blog's
+  typography, and `$$` written as text is never turned into maths.
 
 ```text
 double-pendulum/

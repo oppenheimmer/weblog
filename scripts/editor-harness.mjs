@@ -45,6 +45,9 @@ const STATIC = {
   "/assets/preview-run.js": ["assets/preview-run.js", "text/javascript"],
   "/assets/vendor/d3.v7.9.0.min.js": ["assets/vendor/d3.v7.9.0.min.js", "text/javascript"],
   "/assets/vendor/distill.template.v2.js": ["assets/vendor/distill.template.v2.js", "text/javascript"],
+  // The build copies KaTeX from node_modules; Distill's <d-math> loads it.
+  "/assets/vendor/katex.min.js": ["node_modules/katex/dist/katex.min.js", "text/javascript"],
+  "/styles/katex.min.css": ["node_modules/katex/dist/katex.min.css", "text/css"],
   "/assets/login.js": ["assets/login.js", "text/javascript"],
   "/styles/blog.css": ["assets/styles/blog.css", "text/css"],
   "/styles/editor.css": ["assets/styles/editor.css", "text/css"],

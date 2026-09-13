@@ -1,8 +1,7 @@
 /* ==========================================================================
-   Sourav Mishra — Blog
-   Design tokens + chrome are copied from souravmishra.net (styles/site.css) for
-   visual parity. DESIGN PARITY: if the main site's :root tokens, fonts, or
-   header/footer markup change, mirror them here (see README "Design parity").
+   WeBlog
+   Design tokens and the header and footer chrome live here, at the top, and
+   in lib/templates.mjs.
    ========================================================================== */
 
 :root {
@@ -23,6 +22,46 @@
     --radius-md: 16px;
     --container: min(1120px, calc(100% - 2rem));
 }
+
+/* Distill (CLAUDE.md §3.6). A figure that declares `distill` loads the
+   Distill template, which adds page-wide rules for html sizing and font,
+   figures, tables, pre, sup and the maths to the whole post page. These put
+   this site's values back outside the figure: `revert` where the blog sets
+   nothing, and the blog's or KaTeX's own value where Distill's rule would
+   outrank it. Distill's style is injected before this stylesheet, so the same
+   selector here wins; :where() keeps the specificity Distill's has, so every
+   later rule in this file still wins too. Inside a figure's root, Distill's
+   styling stands. scripts/verify-public-csp.mjs measures the result. */
+:root {
+    font-family: revert;
+    font-size: revert;
+    line-height: revert;
+    text-size-adjust: revert;
+    -webkit-text-size-adjust: revert;
+}
+figure:where(:not(.interactive-root *)) { position: revert; margin: revert; }
+figure img:where(:not(.interactive-root *)) { width: revert; }
+figcaption:where(:not(.interactive-root *)) { color: revert; font-size: revert; line-height: revert; }
+table:where(:not(.interactive-root *)) { border-collapse: revert; border-spacing: revert; }
+table thead:where(:not(.interactive-root *)) { border-bottom: revert; }
+.prose tbody :first-child td:where(:not(.interactive-root *)) { padding-top: 0.7rem; }
+pre:where(:not(.interactive-root *)) { overflow: revert; max-width: revert; }
+sup:where(:not(.interactive-root *)), sub:where(:not(.interactive-root *)) {
+    position: revert;
+    top: revert;
+    vertical-align: revert;
+    line-height: revert;
+}
+aside:where(:not(.interactive-root *)) { grid-column: revert; }
+.katex:where(:not(.interactive-root *)) { contain: revert; display: revert; }
+span.katex:where(:not(.interactive-root *)) { color: revert; -webkit-font-smoothing: revert; }
+span.katex-display:where(:not(.interactive-root *)) { text-align: center; }
+@media print {
+    @page { size: auto; }
+    p:where(:not(.interactive-root *)), code:where(:not(.interactive-root *)) { break-inside: revert; }
+    h2:where(:not(.interactive-root *)), h3:where(:not(.interactive-root *)) { break-after: revert; }
+}
+/* End of the Distill overrides. */
 
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }

@@ -153,13 +153,27 @@ export async function startPageReader(profile) {
   });
 
   return {
-    /** Navigate, wait for `settle` if given, and return the document title. */
-    async read(pageUrl, { settle } = {}) {
+    /**
+     * Navigate, wait for `settle` if given, and return the document title.
+     * `width` sets the viewport's width in CSS pixels, `reducedMotion` asks
+     * for reduced motion, so a page's reveal animation holds still, and
+     * `print` lays the page out for print.
+     */
+    async read(pageUrl, { settle, width, reducedMotion, print } = {}) {
       const { browserContextId } = await send("Target.createBrowserContext");
       const { targetId } = await send("Target.createTarget", { url: "about:blank", browserContextId });
       const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
       const call = (method, params) => send(method, params, sessionId);
       await call("Page.enable");
+      if (width) {
+        await call("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
+      }
+      if (reducedMotion || print) {
+        await call("Emulation.setEmulatedMedia", {
+          media: print ? "print" : "",
+          features: reducedMotion ? [{ name: "prefers-reduced-motion", value: "reduce" }] : [],
+        });
+      }
       const loaded = waitFor(sessionId, "Page.loadEventFired");
       await call("Page.navigate", { url: pageUrl });
       await loaded;

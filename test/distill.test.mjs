@@ -40,6 +40,21 @@ test("the hashes are twelve distinct SHA-256 digests", () => {
   for (const hash of DISTILL_STYLE_HASHES) assert.match(hash, /^sha256-[A-Za-z0-9+/]{43}=$/);
 });
 
+test("both figure loaders stop Distill typesetting $$ text in the page", () => {
+  // Measured in scripts/verify-public-csp.mjs; this pins that Run preview's
+  // loader does what the published one does.
+  for (const file of ["blog.js", "preview-run.js"]) {
+    const script = fs.readFileSync(path.join(ROOT, "assets", file), "utf8");
+    assert.match(script, /tag\.onload = function \(\) \{[^}]*if \(name === "distill" && window\.DMath\) window\.DMath\.katexOptions = \{\};\s*resolve\(\);/,
+      `${file} leaves Distill scanning the page for $$`);
+  }
+  const template = fs.readFileSync(path.join(ROOT, "assets", "vendor", "distill.template.v2.js"), "utf8");
+  // What the loaders rely on: without delimiters, neither the setter nor the
+  // loaded callback scans the document.
+  assert.match(template, /static set katexOptions\(options\) \{\s*DMath\._katexOptions = options;\s*if \(DMath\.katexOptions\.delimiters\)/);
+  assert.match(template, /if \(DMath\.katexOptions\.delimiters\) \{\s*renderMathInElement\(document\.body, DMath\.katexOptions\);/);
+});
+
 test("the vendored Distill template loads KaTeX from this site, and the build ships it", () => {
   const template = fs.readFileSync(path.join(ROOT, "assets", "vendor", "distill.template.v2.js"), "utf8");
   assert.ok(!template.includes("distill.pub/third-party/katex"), "the template still loads KaTeX from distill.pub");
