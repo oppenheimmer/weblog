@@ -359,6 +359,28 @@ test("a resolved payload survives a fallback containing backticks", () => {
   assert.ok(readInteractivePayload(fence[1]).fallback.includes("```"), "the fallback lost its text");
 });
 
+test("a fallback's image survives from resolution to the rendered page, and only inside its bundle", () => {
+  // Found by the Run preview's first fallback with an image: the render-time
+  // re-check validated the resolved address against no files at all, so every
+  // fallback image turned its interactive into "could not be loaded".
+  const record = bundle({ files: [file("index.html"), file("fallback.html"), file("still.png")] });
+  const { body } = resolveInteractiveReferences(`::demo[${record.id}]`, {
+    slug: "a-post", postId: POST, interactives: [record],
+    fallbacks: new Map([[record.id, '<p><img src="still.png" alt="a still"></p>']]),
+  });
+  const payload = body.match(/```weblog-interactive\n([\s\S]*?)\n```/)[1];
+  const dir = `/demos/a-post/${record.name}/${record.revisionId}/`;
+  assert.equal(readInteractivePayload(payload)?.fallback, `<p><img src="${dir}still.png" alt="a still" /></p>`);
+  assert.match(renderInteractive(payload), new RegExp(`<img src="${dir}still\\.png"`));
+
+  for (const src of ["/images/uploads/other/still.png", `/demos/a-post/other/${record.revisionId}/still.png`,
+    `${dir}../../x.png`, "https://evil.example/pixel.png", `${dir}`]) {
+    const forged = JSON.parse(payload);
+    forged.fallback = `<img src="${src}" alt="">`;
+    assert.equal(readInteractivePayload(JSON.stringify(forged)), null, `rendered an image from ${src}`);
+  }
+});
+
 test("the renderer refuses a payload a resolver would not have written", () => {
   // A post may legitimately contain three backticks, so the renderer cannot
   // tell this fence from one an author typed. Every payload is re-checked.
