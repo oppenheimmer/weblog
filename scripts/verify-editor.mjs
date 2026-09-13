@@ -152,7 +152,11 @@ try {
   await page.eval(`[...document.querySelectorAll("#draft-list button")]
     .find((button) => button.textContent.includes("Imported writing flow")).click()`);
   await check("after reload, the saved writing flow opens with its source and attachment", async () => {
-    const reopened = await page.until(`document.getElementById("title").value === "Imported writing flow" && ({
+    // The title is written before the post's attachments load; the saved
+    // status is written after both lists have. Sampling on the title alone lost
+    // that race on a CI runner.
+    const reopened = await page.until(`document.getElementById("title").value === "Imported writing flow" &&
+      /^saved · v\\d+$/.test(document.getElementById("save-state").textContent) && ({
       body: document.getElementById("body").value,
       attachments: document.querySelectorAll("#attachment-list .attachment").length,
     })`);
