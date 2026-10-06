@@ -9,6 +9,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 import { mdBrowser } from "../lib/markdown.mjs";
 import { ROOT } from "./helpers/build-fixture.mjs";
@@ -43,8 +45,32 @@ test("the parsers on the post path are at or above their fixed versions", () => 
     for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
     return true;
   };
-  for (const [name, parent, floor] of [["linkify-it", "markdown-it", "5.0.2"], ["js-yaml", "gray-matter", "3.15.2"]]) {
+  for (const [name, parent, floor] of [
+    ["linkify-it", "markdown-it", "5.0.2"],
+    ["markdown-it", "", "14.3.1"],
+    ["js-yaml", "gray-matter", "3.15.2"],
+  ]) {
     const version = installed(name, parent);
     assert.ok(atLeast(version, floor), `${name} ${version} is below ${floor}, which fixes a quadratic parse`);
   }
+});
+
+test("js-yaml's CLI works with the argparse 2 override", () => {
+  // argparse 1 pulls in unpatched sprintf-js (GHSA-hp3w-g68c-fv3c).
+  // Keep js-yaml 3's safeLoad API for gray-matter and use argparse 2's legacy
+  // aliases for its CLI. Exercise that compatibility across the major override.
+  const require = createRequire(import.meta.url);
+  const matterRequire = createRequire(require.resolve("gray-matter"));
+  const cli = matterRequire.resolve("js-yaml/bin/js-yaml.js");
+  for (const [input, expected] of [
+    ["title: Audit\ntags: [a, b]\n", '{\n  "title": "Audit",\n  "tags": [\n    "a",\n    "b"\n  ]\n}\n'],
+    ['{"title":"Audit"}', "title: Audit\n\n"],
+  ]) {
+    const result = spawnSync(process.execPath, [cli], { input, encoding: "utf8", timeout: 5000 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, expected);
+  }
+  const help = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8", timeout: 5000 });
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /usage: js-yaml/);
 });
