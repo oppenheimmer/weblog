@@ -22,7 +22,7 @@
     "gray-matter": "^4.0.3",
     "highlight.js": "^11.11.1",
     "katex": "^0.19.0",
-    "markdown-it": "^14.3.2",
+    "markdown-it": "^14.3.3",
     "markdown-it-anchor": "^9.2.0",
     "markdown-it-texmath": "^1.0.0",
     "rehype-stringify": "^10.0.1",

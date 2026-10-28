@@ -32,6 +32,27 @@ test("rendering repeated mailto: text grows linearly, not quadratically", () => 
     `224 KB took ${large.toFixed(0)} ms against ${small.toFixed(0)} ms for 56 KB`);
 });
 
+for (const [name, input] of [
+  ["unclosed reference label", (n) => "[" + "a\n".repeat(n)],
+  ["unclosed reference title", (n) => '[a]: /u "' + "x\n".repeat(n)],
+]) {
+  test(`rendering an ${name} grows linearly, not quadratically`, () => {
+    // GHSA-gfr2-rv44-r23c: collecting continuation lines copied the entire
+    // definition on each line, even though the reference was never valid.
+    const measure = (n) => {
+      const text = input(n);
+      const started = process.hrtime.bigint();
+      mdBrowser.render(text);
+      return Number(process.hrtime.bigint() - started) / 1e6;
+    };
+    measure(2000);
+    const small = Math.min(measure(10000), measure(10000));
+    const large = Math.min(measure(40000), measure(40000));
+    assert.ok(large < 250 || large / Math.max(small, 1) < 8,
+      `${name}: 40000 lines took ${large.toFixed(0)} ms against ${small.toFixed(0)} ms for 10000 lines`);
+  });
+}
+
 test("the parsers on the post path are at or above their fixed versions", () => {
   // js-yaml's quadratic cases could not be reproduced through gray-matter here,
   // so the floor itself is what is pinned: a lockfile regression fails loudly.
@@ -47,7 +68,7 @@ test("the parsers on the post path are at or above their fixed versions", () => 
   };
   for (const [name, parent, floor] of [
     ["linkify-it", "markdown-it", "5.0.2"],
-    ["markdown-it", "", "14.3.1"],
+    ["markdown-it", "", "14.3.3"],
     ["js-yaml", "gray-matter", "3.15.2"],
   ]) {
     const version = installed(name, parent);
