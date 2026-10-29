@@ -59,7 +59,7 @@ const STATIC = {
 
 // `editorScript` rewrites the editor's own code before it is served, so a
 // check can run its control against a deliberately broken editor.
-export async function startEditorHarness({ shots = null, editorScript = (text) => text } = {}) {
+export async function startEditorHarness({ shots = null, editorScript = (text) => text, requestHook = () => false } = {}) {
   let SITE = null;
 
   // ---- the backend --------------------------------------------------------------
@@ -112,6 +112,7 @@ export async function startEditorHarness({ shots = null, editorScript = (text) =
     // The one piece of Vercel's response helpers the handlers use.
     res.status = (code) => { res.statusCode = code; return res; };
     try {
+      if (await requestHook(req, res, url)) return;
       if (url.pathname.startsWith("/local-upload/") && req.method === "PUT") {
         const key = Buffer.from(url.pathname.slice("/local-upload/".length), "base64url").toString("utf8");
         const chunks = [];

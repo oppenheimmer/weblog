@@ -309,3 +309,7 @@
 .source-diff span { display: block; }
 .diff-added { background: #e1f2e3; color: #15451e; }
 .diff-removed { background: #fae3e3; color: #702020; }
+.attachment-alt { min-width: 0; display: grid; gap: .5rem; }
+.attachment-alt label { display: grid; gap: .25rem; }
+.attachment-alt input, .attachment-alt textarea { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; color: inherit; }
+.attachment-alt textarea { min-height: 4rem; resize: vertical; }

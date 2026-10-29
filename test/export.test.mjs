@@ -8,7 +8,8 @@ import { createUploads } from "../lib/server/uploads.mjs";
 import { createInteractives } from "../lib/server/interactives.mjs";
 import { keys } from "../lib/server/keys.mjs";
 import { postExportManifest, exportFileChunk } from "../lib/server/export.mjs";
-import { createZip, sourceDocument, verifyExportFile, EXPORT_CHUNK_BYTES } from "../assets/export.mjs";
+import { createZip, sourceDocument, verifyExportFile, exportRequest, EXPORT_CHUNK_BYTES } from "../assets/export.mjs";
+import http from "node:http";
 import { createFakeS3, FAKE_CONFIG } from "./helpers/fake-r2.mjs";
 const hash = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
@@ -79,4 +80,33 @@ test("source export preserves metadata and archive paths cannot escape or collid
     await assert.rejects(() => createZip([{ path, bytes: new Uint8Array() }]), /Unsafe/);
   }
   await assert.rejects(() => createZip([{ path: "x", bytes: new Uint8Array() }, { path: "x", bytes: new Uint8Array() }]), /duplicate/);
+});
+
+test("export requests bound retries, include body reads in deadlines and respect cancellation", async (t) => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    calls++;
+    if (req.url === "/retry" && calls < 3) { res.writeHead(503); res.end('{}'); return; }
+    if (req.url === "/denied") { res.writeHead(401); res.end('{}'); return; }
+    res.writeHead(200); res.flushHeaders();
+    const timer = setTimeout(() => res.end("verified"), req.url === "/slow" ? 200 : 0);
+    res.on("close", () => clearTimeout(timer));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const bytes = await exportRequest(origin + "/retry");
+  assert.equal(Buffer.from(bytes).toString(), "verified"); assert.equal(calls, 3);
+  calls = 0;
+  await assert.rejects(() => exportRequest(origin + "/denied"), (e) => e.status === 401);
+  assert.equal(calls, 1);
+  await assert.rejects(() => exportRequest(origin + "/slow", { timeoutMs: 20, retries: 0 }), { name: "TimeoutError" });
+  const controller = new AbortController();
+  const reading = exportRequest(origin + "/slow", { signal: controller.signal });
+  setTimeout(() => controller.abort(), 20);
+  await assert.rejects(() => reading, { name: "AbortError" });
+  const zipController = new AbortController();
+  const zip = createZip([{ path: "large.bin", bytes: Buffer.alloc(8 * EXPORT_CHUNK_BYTES) }], { signal: zipController.signal });
+  setTimeout(() => zipController.abort(), 0);
+  await assert.rejects(() => zip, { name: "AbortError" });
 });

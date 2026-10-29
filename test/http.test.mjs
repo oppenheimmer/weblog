@@ -429,7 +429,7 @@ test("history, revision reads and complete export use the existing authenticatio
   const first = await drafts.create({ title: "Private history", date: "2026-10-29", body: "old" });
   const second = await drafts.save(first.draft.postId, { body: "new" }, first.etag);
   const url = `/api/drafts/${first.draft.postId}/`;
-  for (const suffix of ["?action=history", `?revision=${first.draft.revisionId}`, "?action=export"]) {
+  for (const suffix of ["?action=history", `?revision=${first.draft.revisionId}`, "?action=export", "?action=checkpoints", "?checkpoint=c_0000000000000000"]) {
     const anonymous = fakeRes();
     await draftById(fakeReq({ url: url + suffix }), anonymous);
     assert.equal(anonymous.statusCode, 401);
@@ -452,4 +452,32 @@ test("history, revision reads and complete export use the existing authenticatio
   const badRevision = fakeRes();
   await draftById(fakeReq({ url: url + "?revision=../../current", headers: { cookie: auth.cookie } }), badRevision);
   assert.equal(badRevision.statusCode, 400);
+});
+
+test("checkpoint actions require CSRF and preserve the conditional restore contract", async () => {
+  const { sessions, drafts } = harness();
+  const auth = await authed(sessions);
+  const first = await drafts.create({ title: "Checkpoint route", body: "Before" });
+  const url = `/api/drafts/${first.draft.postId}/`;
+  const headers = { cookie: auth.cookie, "x-csrf-token": auth.csrf, "if-match": first.etag };
+  const denied = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers: { cookie: auth.cookie, "if-match": first.etag }, body: { action: "checkpoint", name: "Before" } }), denied);
+  assert.equal(denied.statusCode, 403);
+  const made = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers, body: { action: "checkpoint", name: "Before" } }), made);
+  assert.equal(made.statusCode, 201);
+  const checkpointId = made.json().checkpoint.id;
+  const saved = await drafts.save(first.draft.postId, { body: "After" }, first.etag);
+  const conflict = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers, body: { action: "restore-checkpoint", checkpointId } }), conflict);
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().current.body, "After");
+  const restored = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers: { ...headers, "if-match": saved.etag }, body: { action: "restore-checkpoint", checkpointId } }), restored);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(restored.json().draft.body, "Before");
+  const removed = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers: { ...headers, "if-match": restored.json().etag }, body: { action: "remove-checkpoint", checkpointId } }), removed);
+  assert.equal(removed.statusCode, 200);
+  assert.equal((await drafts.checkpoints(first.draft.postId)).length, 0);
 });

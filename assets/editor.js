@@ -5,7 +5,7 @@
 // rendered by the server into a sandboxed frame, and what the site actually
 // shows of each published post.
 import { fieldChanges, diffLines, assetChanges } from "./compare.mjs";
-import { createZip, sourceDocument, verifyExportFile, EXPORT_CHUNK_BYTES } from "./export.mjs";
+import { createZip, sourceDocument, verifyExportFile, exportRequest, EXPORT_CHUNK_BYTES } from "./export.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -39,6 +39,10 @@ const els = {
     comparisonNote: $("comparison-note"), comparisonBody: $("comparison-body"), comparisonClose: $("comparison-close"),
     reviewBaseline: $("review-baseline"), reviewChanges: $("review-changes"), reviewNote: $("review-note"),
     exportPackage: $("export-package"), exportNote: $("export-note"),
+    exportCancel: $("export-cancel"),
+    checkpointName: $("checkpoint-name"), checkpointSelect: $("checkpoint-select"), checkpointCreate: $("checkpoint-create"),
+    checkpointCompare: $("checkpoint-compare"), checkpointRestore: $("checkpoint-restore"),
+    checkpointRemove: $("checkpoint-remove"), checkpointNote: $("checkpoint-note"),
 };
 
 const state = {
@@ -55,6 +59,7 @@ const state = {
     autosave: { timer: null },
     attachments: [],
     attachmentAlts: new Map(),
+    attachmentDetails: new Map(),
     // The newest revision of each interactive, which is what a post publishes,
     // and each one's stored revisions, most recently in use first.
     interactives: [],
@@ -74,6 +79,7 @@ const state = {
 };
 
 const FIELDS = ["title", "date", "format", "slug", "description", "tags", "body"];
+const IMAGE_DIRECTIVE = /^[ \t]*::image\[([^\]\n]+)\](?:[ \t]+(\{[^\n]*\}))?[ \t]*$/gm;
 
 // ---------------------------------------------------------------- helpers
 
@@ -455,6 +461,8 @@ async function save({ force = false, automatic = false } = {}) {
 function resetComparison() {
     els.comparison.hidden = true;
     els.historyRevision.replaceChildren();
+    els.checkpointSelect.replaceChildren();
+    writeText(els.checkpointNote, "");
     writeText(els.historyNote, "Refresh saves to load this draft’s retained history.");
     writeText(els.reviewNote, "");
 }
@@ -472,7 +480,9 @@ function invalidateComparison() {
 async function refreshHistory() {
     const postId = state.postId;
     if (!postId) { writeText(els.historyNote, "Save this post to start its history."); return; }
-    const { data } = await api(`/api/drafts/${postId}/?action=history`);
+    const [{ data }, { data: saved }] = await Promise.all([
+        api(`/api/drafts/${postId}/?action=history`), api(`/api/drafts/${postId}/?action=checkpoints`),
+    ]);
     if (postId !== state.postId) return;
     const previous = els.historyRevision.value;
     els.historyRevision.replaceChildren(...data.revisions.map((revision) => {
@@ -483,6 +493,14 @@ async function refreshHistory() {
     }));
     if (data.revisions.some((r) => r.revisionId === previous)) els.historyRevision.value = previous;
     writeText(els.historyNote, `${data.revisions.length} retained save(s). Deleted attachments may need relinking after restore.`);
+    const selected = els.checkpointSelect.value;
+    els.checkpointSelect.replaceChildren(...saved.checkpoints.map((checkpoint) => {
+        const option = document.createElement("option");
+        option.value = checkpoint.id;
+        option.textContent = `${checkpoint.name} · v${checkpoint.version} · ${formatWhen(checkpoint.createdAt)}`;
+        return option;
+    }));
+    if (saved.checkpoints.some((c) => c.id === selected)) els.checkpointSelect.value = selected;
 }
 
 function showComparison(before, after, label, assets = []) {
@@ -515,9 +533,10 @@ async function compareHistory() {
     showComparison(data.draft, readForm(), `Retained draft v${data.draft.version} → current text on screen`);
 }
 
-async function restoreHistory() {
-    if (isBusy(els.historyRestore)) return;
-    const postId = state.postId, revisionId = els.historyRevision.value;
+async function restoreHistory({ checkpoint = false } = {}) {
+    const restoreButton = checkpoint ? els.checkpointRestore : els.historyRestore;
+    if (isBusy(restoreButton)) return;
+    const postId = state.postId, revisionId = checkpoint ? els.checkpointSelect.value : els.historyRevision.value;
     if (!postId || !revisionId) return;
     if (!confirm("Save the current text, then restore this revision as a new save? Attachments and publications keep their current state.")) return;
     if (state.savePromise) await state.savePromise;
@@ -525,10 +544,11 @@ async function restoreHistory() {
     if (postId !== state.postId) return;
     stopAutosave();
     const snapshot = JSON.stringify(readForm());
-    setBusy(els.historyRestore, true);
+    setBusy(restoreButton, true);
     try {
         const { res, data } = await api(`/api/drafts/${postId}/`, {
-            method: "PUT", etag: state.etag, conflict: true, body: { action: "restore", revisionId },
+            method: "PUT", etag: state.etag, conflict: true,
+            body: checkpoint ? { action: "restore-checkpoint", checkpointId: revisionId } : { action: "restore", revisionId },
         });
         if (postId !== state.postId) return;
         if (res.status === 409) {
@@ -548,13 +568,42 @@ async function restoreHistory() {
         setStatus(`restored as v${data.draft.version}${isDirty() ? " · newer typing unsaved" : ""}`);
         writeText(els.historyNote, "Text and fields restored. Check Preview for references that need relinking.");
         scheduleReadiness(); schedulePreview({ force: true });
-    } finally { setBusy(els.historyRestore, false); }
+    } finally { setBusy(restoreButton, false); }
 }
 
 els.historyPanel.addEventListener("toggle", guard(async () => { if (els.historyPanel.open) await refreshHistory(); }));
 els.historyRefresh.addEventListener("click", guard(refreshHistory));
 els.historyCompare.addEventListener("click", guard(compareHistory));
 els.historyRestore.addEventListener("click", guard(restoreHistory));
+els.checkpointCreate.addEventListener("click", guard(async () => {
+    if (isBusy(els.checkpointCreate)) return;
+    setBusy(els.checkpointCreate, true);
+    try {
+        if (state.savePromise) await state.savePromise;
+        if (!state.postId || isDirty()) { if (!(await save()) || isDirty()) return; }
+        const postId = state.postId;
+        const { data } = await api(`/api/drafts/${postId}/`, { method: "PUT", etag: state.etag,
+            body: { action: "checkpoint", name: els.checkpointName.value },
+        });
+        if (postId !== state.postId) return;
+        await refreshHistory();
+        els.checkpointSelect.value = data.checkpoint.id;
+        writeText(els.checkpointNote, `Saved “${data.checkpoint.name}” from v${data.checkpoint.version}.`);
+    } finally { setBusy(els.checkpointCreate, false); }
+}));
+els.checkpointCompare.addEventListener("click", guard(async () => {
+    const postId = state.postId, id = els.checkpointSelect.value;
+    if (!postId || !id) return;
+    const { data } = await api(`/api/drafts/${postId}/?checkpoint=${encodeURIComponent(id)}`);
+    if (postId === state.postId) showComparison(data.draft, readForm(), `Checkpoint “${data.name}” (v${data.draft.version}) → current text`);
+}));
+els.checkpointRestore.addEventListener("click", guard(() => restoreHistory({ checkpoint: true })));
+els.checkpointRemove.addEventListener("click", guard(async () => {
+    const postId = state.postId, id = els.checkpointSelect.value;
+    if (!postId || !id || !confirm("Remove this named checkpoint permanently? The current draft and publication are unchanged.")) return;
+    await api(`/api/drafts/${postId}/`, { method: "PUT", etag: state.etag, body: { action: "remove-checkpoint", checkpointId: id } });
+    if (postId === state.postId) { await refreshHistory(); writeText(els.checkpointNote, "Checkpoint removed."); }
+}));
 els.comparisonClose.addEventListener("click", () => { els.comparison.hidden = true; state.comparisonReturn?.focus(); });
 
 els.reviewChanges.addEventListener("click", guard(async () => {
@@ -647,6 +696,12 @@ const escapePattern = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\
 
 function codeRanges(source, format) {
     const ranges = [];
+    source = source.replace(IMAGE_DIRECTIVE, (line, target, details, offset) => {
+        if (!details) return line;
+        const start = line.indexOf(details);
+        ranges.push([offset + start, offset + line.length]);
+        return line.slice(0, start) + " ".repeat(line.length - start);
+    });
     if (format === "latex") {
         for (const match of source.matchAll(/\\begin\{(verbatim|lstlisting|minted|Verbatim)\*?\}[\s\S]*?\\end\{\1\*?\}/g)) {
             ranges.push([match.index, match.index + match[0].length]);
@@ -700,6 +755,7 @@ function sourceReferences() {
             if (!inCode(ranges, match.index)) found.push({ kind, id: id(match) });
         }
     };
+    add("image", IMAGE_DIRECTIVE);
     if (els.format.value === "latex") {
         add("image", /\\includegraphics\s*(?:\[[^\]]*\])?\s*\{\s*attachments\/([^}]*?)\s*\}/g,
             (match) => match[1].replace(/\.[A-Za-z0-9]+$/, ""));
@@ -712,7 +768,7 @@ function sourceReferences() {
         add("figure", /::figure\[([^\]]*)\]/g);
     }
     const known = new Set([...state.attachments, ...state.interactives].map((item) => item.id));
-    return [...new Map(found.filter((item) => !known.has(item.id))
+    return [...new Map(found.filter((item) => !item.id.startsWith("/") && !known.has(item.id))
         .map((item) => [`${item.kind}:${item.id}`, item])).values()];
 }
 
@@ -756,6 +812,8 @@ function relinkReference() {
     const replacement = relinkChoices(kind).find((choice) => choice.id === els.relinkAttachment.value);
     if (!oldId || !replacement) return;
     const old = escapePattern(oldId);
+    if (kind === "image") replaceSourceReferences(new RegExp(`(::image\\[)${old}(\\])`, "g"),
+        (match) => `${match[1]}${replacement.id}${match[2]}`);
     if (kind === "demo" || kind === "figure") {
         replaceSourceReferences(new RegExp(`(::${kind}\\[)${old}(\\])`, "g"),
             (match) => `${match[1]}${replacement.id}${match[2]}`);
@@ -782,6 +840,12 @@ function referenceFor(attachment) {
         return latex ? `\\input{attachments/${attachment.id}.tex}` : `\n::tex[${attachment.id}]\n`;
     }
     const ext = attachment.publicName.split(".").pop();
+    const notes = state.attachmentDetails.get(attachment.id) ?? {};
+    if (Object.values(notes).some((text) => text.trim()) || (latex && state.attachmentAlts.has(attachment.id))) {
+        return `\n::image[${attachment.id}] ${JSON.stringify({
+            alt: state.attachmentAlts.get(attachment.id) ?? altFromName(attachment.originalName || attachment.publicName), ...notes,
+        })}\n`;
+    }
     return latex
         ? `\\includegraphics{attachments/${attachment.id}.${ext}}`
         : `![${String(state.attachmentAlts.get(attachment.id) ?? altFromName(attachment.originalName || attachment.publicName))
@@ -811,7 +875,9 @@ function insertOnOwnLine(text) {
 
 async function loadAttachments() {
     state.attachments = [];
-    state.attachmentAlts.clear();
+    if (state.attachmentDetailsPost !== state.postId) {
+        state.attachmentAlts.clear(); state.attachmentDetails.clear(); state.attachmentDetailsPost = state.postId;
+    }
     if (state.postId) {
         const { data } = await api(`/api/uploads/?postId=${encodeURIComponent(state.postId)}`);
         state.attachments = data.attachments ?? [];
@@ -851,15 +917,31 @@ function renderAttachments() {
         insert.addEventListener("click", () => { insertAtCursor(referenceFor(attachment)); els.body.focus(); });
 
         let alt = null;
-        if (attachment.kind === "image" && els.format.value === "markdown") {
-            alt = document.createElement("label");
+        if (attachment.kind === "image") {
+            alt = document.createElement("div");
             alt.className = "attachment-alt";
+            const label = document.createElement("label");
+            label.textContent = "Alt text";
             const input = document.createElement("input");
             input.type = "text";
+            input.maxLength = 1000;
             input.value = state.attachmentAlts.get(attachment.id) ?? altFromName(attachment.originalName || attachment.publicName);
             input.setAttribute("aria-label", `Alt text for ${attachment.publicName}`);
             input.addEventListener("input", () => state.attachmentAlts.set(attachment.id, input.value));
-            alt.append(input);
+            label.append(input); alt.append(label);
+            for (const [field, name, maxLength] of [["caption", "Caption", 2000], ["credit", "Credit", 1000], ["description", "Long description", 10000]]) {
+                const detail = document.createElement("label"); detail.textContent = name;
+                const value = document.createElement(field === "description" ? "textarea" : "input");
+                value.value = state.attachmentDetails.get(attachment.id)?.[field] ?? "";
+                value.maxLength = maxLength;
+                value.setAttribute("aria-label", `${name} for ${attachment.publicName}`);
+                value.addEventListener("input", () => state.attachmentDetails.set(attachment.id, {
+                    ...state.attachmentDetails.get(attachment.id), [field]: value.value,
+                }));
+                detail.append(value); alt.append(detail);
+            }
+            const hint = document.createElement("small"); hint.textContent = "Details apply when you Insert this image. Alt text stays separate from its visible description.";
+            alt.append(hint);
         }
 
         const remove = document.createElement("button");
@@ -1809,14 +1891,22 @@ els.exportBtn.addEventListener("click", () => {
 
 els.exportPackage.addEventListener("click", guard(async () => {
     if (isBusy(els.exportPackage)) return;
+    const controller = new AbortController();
+    state.exportController = controller;
     setBusy(els.exportPackage, true);
+    els.exportCancel.hidden = false;
     try {
         if (state.savePromise) await state.savePromise;
+        controller.signal.throwIfAborted();
         if (!state.postId || isDirty()) {
             if (!(await save()) || isDirty()) throw new Error("Save the current changes before exporting a complete post. Export source is always available.");
         }
         const postId = state.postId;
-        const { data } = await api(`/api/drafts/${postId}/?action=export`, { etag: state.etag });
+        controller.signal.throwIfAborted();
+        const request = (url, options = {}) => exportRequest(url, { ...options, signal: controller.signal,
+            onRetry: (attempt) => writeText(els.exportNote, `Request interrupted. Retrying (${attempt} of 2)…`),
+        });
+        const data = await request(`/api/drafts/${postId}/?action=export`, { json: true, headers: { "if-match": state.etag } });
         const encoder = new TextEncoder();
         const files = data.virtual.map((file) => ({ path: file.path, bytes: encoder.encode(file.text) }));
         let completed = 0;
@@ -1825,30 +1915,37 @@ els.exportPackage.addEventListener("click", guard(async () => {
             const chunks = [];
             for (let offset = 0; offset < Math.max(1, file.bytes); offset += EXPORT_CHUNK_BYTES) {
                 const query = new URLSearchParams({ action: "export-file", file: file.token, offset: String(offset) });
-                const response = await fetch(`/api/drafts/${postId}/?${query}`, { credentials: "same-origin", cache: "no-store" });
-                if (!response.ok) {
-                    const error = await response.json().catch(() => ({}));
-                    throw new Error(error.message || "An export file could not be downloaded. Sign in and try again; Export source remains available.");
-                }
-                const bytes = await response.arrayBuffer();
+                const bytes = await request(`/api/drafts/${postId}/?${query}`);
                 if (bytes.byteLength !== Math.min(EXPORT_CHUNK_BYTES, file.bytes - offset)) throw new Error(`Incomplete export file: ${file.path}`);
                 chunks.push(bytes);
             }
             const blob = new Blob(chunks);
-            await verifyExportFile(blob, file);
+            await verifyExportFile(blob, file, { signal: controller.signal });
             files.push({ path: file.path, bytes: blob });
         }
         writeText(els.exportNote, "Creating ZIP…");
-        const blob = await createZip(files);
+        const blob = await createZip(files, { signal: controller.signal,
+            onProgress: (path) => writeText(els.exportNote, `Creating ZIP: ${path}`),
+        });
+        controller.signal.throwIfAborted();
         const url = URL.createObjectURL(blob), link = document.createElement("a");
         link.href = url; link.download = data.filename; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         writeText(els.exportNote, `Exported saved v${data.version} with ${data.files.length} verified asset file(s).`);
     } catch (err) {
+        if (controller.signal.aborted) {
+            writeText(els.exportNote, "Export cancelled. No archive was downloaded."); return;
+        }
         writeText(els.exportNote, "Complete export stopped. No partial ZIP was downloaded; Export source remains available.");
         throw err;
-    } finally { setBusy(els.exportPackage, false); }
+    } finally { setBusy(els.exportPackage, false); els.exportCancel.hidden = true; state.exportController = null; }
 }));
+
+els.exportCancel.addEventListener("click", () => {
+    state.exportController?.abort();
+    writeText(els.exportNote, "Cancelling export…");
+    els.exportPackage.focus();
+});
 
 els.logout.addEventListener("click", guard(async () => {
     if (isDirty() && !confirm("This draft has unsaved changes. Sign out anyway?")) return;

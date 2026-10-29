@@ -300,7 +300,8 @@ There is no repository step and no terminal step.
    its body; **Import source** accepts `.md`, `.markdown` and `.tex` files.
    Attach images or `.tex` snippets with the attach button, by pasting, or by
    dropping them on the page. Each attachment's reference is inserted on a line
-   of its own. Image alt text is editable before Insert, and a missing reference
+   of its own. Image alt text, caption, credit and long description are editable
+   before Insert; details are stored in the inserted source. A missing reference
    can be relinked to a verified attachment of the same kind. **Interactives**
    attaches a lab or figure folder, replaces or removes one, and puts one of
    its last three revisions back (README, *Interactive posts*).
@@ -310,7 +311,11 @@ There is no repository step and no terminal step.
    publishing. With an interactive attached, **Run interactives** runs them in
    that frame, still without access to the editor.
 4. Changes autosave after a short quiet period; **Save** makes an immediate
-   checkpoint. **Publish** saves first, freezes that revision into R2,
+   revision. **Draft history** compares or restores retained saves. Its named
+   checkpoints keep source snapshots until removed or the draft is discarded,
+   up to ten snapshots and 5 MiB in total per post. Restore saves the current
+   work first and reports conflicts; it does not restore deleted assets.
+   **Publish** saves first, freezes that revision into R2,
    updates the published index, and fires the deploy hook.
    The line beside Publish says beforehand what it will publish — the
    address, images, snippets and interactives — or why it would refuse.
@@ -384,6 +389,9 @@ the current draft, or anything younger than an hour. Retention: superseded
 published revisions 90 days (the rollback window), draft history 30 days or 20
 revisions per post, unattached uploads 24 hours, publication jobs 30 days once
 the index no longer names their revision, or an hour once their post is gone.
+Named source checkpoints are stored separately from ordinary revisions and
+survive their cleanup, within the ten-checkpoint/5 MiB per-post limit. They
+retain text and metadata, not attachment or bundle revisions.
 An interactive keeps its three most recently used bundle revisions, and a
 published bundle copy goes a day after the last stored revision naming it; if
 any of those facts cannot be read, no bundle of that post is touched. It runs
@@ -433,8 +441,13 @@ and current verified assets as a ZIP. The browser assembles the package from
 authenticated same-origin chunks of at most 1 MiB, verifies every file hash,
 and downloads only after all files pass. This needs no new R2 CORS permission.
 It preserves source references with a mapping manifest and includes no signed
-URLs or credentials. It does not include retained history or operational
-records; keep the dated bucket backups below for full recovery.
+URLs or credentials. **Cancel export** aborts downloads and ZIP assembly without
+downloading a partial archive; any completed source save remains. Each request,
+including its response body, has a 15-second deadline and at most two retries
+for transient network/server errors. Auth failures, conflicts and verification
+errors stop immediately. The source-only export still works offline. A post
+ZIP excludes retained history, named checkpoints and operational records; keep
+the dated bucket backups below for full recovery.
 
 Configure the remote once (`rclone config`, or write it directly):
 
@@ -545,6 +558,7 @@ node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no 
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
 node scripts/verify-authoring.mjs        # history, publication comparisons, link warnings and a real ZIP download
+node scripts/verify-export-reliability.mjs # cancellation, bounded retries and a 24 MiB ZIP at phone size
 node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
 node scripts/verify-editor-interactives.mjs  # attach, replace and remove folders; Run preview stays out of the editor
 ```

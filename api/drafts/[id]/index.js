@@ -19,6 +19,8 @@ export default route(async ({ req, res, requestId, store, annotate }) => {
 
   if (req.method === "GET") {
     const query = new URL(req.url, "http://x").searchParams;
+    if (query.get("action") === "checkpoints") return sendJson(res, 200, { checkpoints: await drafts.checkpoints(postId) });
+    if (query.has("checkpoint")) return sendJson(res, 200, await drafts.getCheckpoint(postId, query.get("checkpoint")));
     if (query.get("action") === "export") return sendJson(res, 200, await postExportManifest(store, postId, { etag: req.headers?.["if-match"] }));
     if (query.get("action") === "export-file") {
       const bytes = await exportFileChunk(store, postId, query.get("file"), Number(query.get("offset") ?? 0));
@@ -55,9 +57,18 @@ export default route(async ({ req, res, requestId, store, annotate }) => {
   }
 
   try {
+    if (body?.action === "checkpoint") {
+      return sendJson(res, 201, { checkpoint: await drafts.checkpoint(postId, body.name, etag) });
+    }
+    if (body?.action === "remove-checkpoint") {
+      await drafts.removeCheckpoint(postId, body.checkpointId);
+      return sendJson(res, 200, { ok: true });
+    }
     const saved = body?.action === "restore"
       ? await drafts.restore(postId, body.revisionId, etag)
-      : await drafts.save(postId, body ?? {}, etag);
+      : body?.action === "restore-checkpoint"
+        ? await drafts.restoreCheckpoint(postId, body.checkpointId, etag)
+        : await drafts.save(postId, body ?? {}, etag);
     annotate({ action: "save", revisionId: saved.draft.revisionId });
     res.setHeader("etag", saved.etag);
     return sendJson(res, 200, saved);

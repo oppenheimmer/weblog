@@ -108,6 +108,9 @@ jobs:
       - name: Draft history, publication comparisons and complete exports
         run: node scripts/verify-authoring.mjs
 
+      - name: Large exports, cancellation and interrupted requests
+        run: node scripts/verify-export-reliability.mjs
+
       # A real file drop and a real clipboard paste, then the editor by
       # keyboard and through its accessibility tree. Exits 2 if the runner's
       # browser cannot hold an image on its clipboard.

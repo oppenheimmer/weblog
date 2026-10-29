@@ -42,6 +42,11 @@ terminal step.
   interactive revisions and the live publication keep their current state, so
   an old reference may need relinking. History follows the existing retention
   window of 30 days or 20 revisions.
+- **Named checkpoints** in Draft history keep source snapshots independently of
+  ordinary history cleanup. Name a saved draft, compare it later, or restore it
+  as a new conditional save. Each post keeps at most ten checkpoints using
+  5 MiB in total, until explicitly removed or the draft is discarded. These
+  snapshots cover text and fields; they do not pin attachment or bundle bytes.
 - **Review changes before publishing** compares text, metadata, images and
   interactive revisions against **Latest publication** in R2 or **Currently
   live**, read from the served manifest. These can be different revisions.
@@ -52,6 +57,25 @@ terminal step.
   formula, shows as a warning. Warnings never block publishing.
 - **Beside Publish**, a line says what it would do, for example *Ready to
   publish at /your-slug/ with 2 images*, or why it would refuse.
+
+### Image details
+
+Each attached image has separate **Alt text**, **Caption**, **Credit** and
+**Long description** fields. Fill them before **Insert**. Alt text stays on the
+image; the other fields appear as plain text below it. The source carries the
+details, so edit an existing occurrence in the source rather than reinserting
+it. Preview, publication and export use those same details.
+
+Images with notes use this engine directive on a separate paragraph in either
+Markdown or LaTeX (replace the id with the attached image's id):
+
+```text
+::image[a_0123456789abcdef] {"alt":"A rising curve","caption":"Measured growth","credit":"Author","description":"Values rise steadily over the measured interval."}
+```
+
+The JSON must fit on one line. Limits are 1,000 characters for alt text, 2,000
+for a caption, 1,000 for credit and 10,000 for a description. These fields accept
+plain text. The directive is an engine extension to LaTeX.
 
 ### Markdown
 
@@ -129,8 +153,12 @@ The source retains its original engine directives and attachment references.
 
 Every file is verified before the ZIP is downloaded. Missing, changed or
 unavailable files stop the export; no partial ZIP is offered. Complete export
-needs a session and network access. **Export source** remains available offline
-and after session expiry. Retained history and bucket operational records are
+needs a session and network access. **Cancel export** stops downloads or ZIP
+assembly. Each download request has a 15-second deadline and retries transient
+network/server failures at most twice. Authentication, conflicts and file
+verification failures stop immediately. Cancellation keeps any source save
+already made. **Export source** remains available offline and after session
+expiry. Retained history, named checkpoints and bucket operational records are
 covered by the full R2 backup described in INSTALL.
 
 ### Publication status
@@ -157,7 +185,8 @@ and the panel shows the reason with a link to the deployment log.
 - **Rebuild site** rebuilds without changing a post, and clears out what
   nothing needs any more.
 - **Discard draft** deletes a post's draft, revisions, attachments and
-  interactives. It is refused while the post is published.
+  interactives, including named checkpoints. It is refused while the post is
+  published.
 
 A published post keeps its slug until it is unpublished. The sidebar lists
 published posts under **On the site**, and everything the site does not show
@@ -270,6 +299,7 @@ node scripts/verify-listing.mjs              # feed and table
 node scripts/verify-preview-sandbox.mjs      # preview runs no script
 node scripts/verify-editor.mjs               # writing flow and On the site
 node scripts/verify-authoring.mjs            # history, comparisons, link warnings, complete ZIP download
+node scripts/verify-export-reliability.mjs    # cancellation, retries, 24 MiB ZIP in phone emulation
 node scripts/verify-editor-access.mjs        # keyboard, drop, paste, sign-out
 node scripts/verify-editor-interactives.mjs  # folders and Run preview
 node scripts/verify-demo-sandbox.mjs         # labs sealed, figures mounted
@@ -356,7 +386,8 @@ Design points worth knowing:
   so deleting or sweeping one post cannot touch another. The inventory is
   rebuilt from what exists, never maintained. Superseded published revisions
   stay 90 days, draft history 30 days or 20 revisions, unfinished uploads a
-  day; nothing under an hour old is swept.
+  day; nothing under an hour old is swept. Named source checkpoints survive
+  ordinary history cleanup, within the explicit ten-checkpoint/5 MiB limit.
 
 Site chrome — colours, header, footer and icons — lives at the top of
 `assets/styles/blog.css` and in `lib/templates.mjs`.

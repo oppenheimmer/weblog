@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { startEditorHarness, PASSWORD } from "./editor-harness.mjs";
+import { startEditorHarness, PASSWORD, sleep } from "./editor-harness.mjs";
 import { createDraftStore } from "../lib/server/drafts.mjs";
 import { createUploads } from "../lib/server/uploads.mjs";
 import { keys } from "../lib/server/keys.mjs";
@@ -42,6 +42,12 @@ try {
     return true;
   });
   const live = (await drafts.get(first.draft.postId)).draft;
+  await page.type("#checkpoint-name", "Before restructuring");
+  await page.click("#checkpoint-create");
+  await check("a named checkpoint captures the saved source with its chosen label", async () => {
+    await page.until('document.getElementById("checkpoint-note").textContent.includes("Saved")');
+    return (await drafts.checkpoints(first.draft.postId))[0]?.name === "Before restructuring";
+  });
   await publisher.publish(live);
   await finishBuild();
   const latest = await drafts.save(live.postId, { body: "Latest publication" }, (await drafts.get(live.postId)).etag);
@@ -72,6 +78,28 @@ try {
     return await page.eval('document.getElementById("diagnostics").hidden');
   });
   const downloads = path.join(harness.work, "downloads");
+  await page.type('input[aria-label="Caption for image.png"]', '<script>caption stays text</script>');
+  await page.type('input[aria-label="Credit for image.png"]', 'Author credit');
+  await page.type('textarea[aria-label="Long description for image.png"]', 'The measured trend rises over time.');
+  await page.click('#attachment-list button[aria-label="Insert image.png"]');
+  await check("image details insert into source and render semantically in the sandbox", async () => {
+    await page.until('document.getElementById("body").value.includes("::image[") && document.getElementById("preview-state").textContent === "up to date"');
+    // Chromium isolates the opaque-origin preview in a separate target.
+    const { targetInfos } = await page.send("Target.getTargets");
+    const target = targetInfos.find((t) => t.type === "iframe" && t.browserContextId === page.browserContextId);
+    assert.ok(target, "the sandboxed preview has loaded");
+    const { sessionId } = await page.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+    let rendered = false;
+    for (let i = 0; i < 75 && !rendered; i++) {
+      const { result } = await page.send("Runtime.evaluate", { returnByValue: true,
+        expression: 'Boolean(document.querySelector("figure.article-image figcaption")) && document.querySelector(".image-caption").textContent === "<script>caption stays text</script>" && document.querySelector(".image-credit").textContent.includes("Author credit") && document.querySelector(".image-description").textContent.includes("rises over time") && document.querySelectorAll(".article-image script").length === 0',
+      }, sessionId);
+      rendered = result.value === true;
+      if (!rendered) await sleep(200);
+    }
+    await page.send("Target.detachFromTarget", { sessionId });
+    return rendered;
+  });
   fs.mkdirSync(downloads);
   await page.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloads, browserContextId: page.browserContextId });
   await page.click("#export-package");
@@ -88,6 +116,18 @@ try {
   await check("authoring tools do not overflow a phone", async () => {
     await page.call("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: false });
     return await page.eval('document.documentElement.scrollWidth <= innerWidth + 1');
+  });
+  await page.click("#history-refresh");
+  await page.until('document.getElementById("checkpoint-select").options.length === 1');
+  await page.click("#checkpoint-compare");
+  await check("checkpoint comparison identifies its named baseline", async () => {
+    await page.until('document.getElementById("comparison-label").textContent.includes("Before restructuring")');
+    return true;
+  });
+  await page.click("#checkpoint-restore");
+  await check("checkpoint restore makes a new save without removing attachments", async () => {
+    await page.until('document.getElementById("body").value === "Original text"');
+    return (await drafts.get(first.draft.postId)).draft.body === "Original text" && (await uploads.list(first.draft.postId)).length === 1;
   });
   await check("no script or server errors", async () => scriptErrors.length === 0 && serverErrors.length === 0);
 } finally { await harness.shutdown(); }
