@@ -16,6 +16,9 @@ import { buildManifest } from "./lib/server/published.mjs";
 import { postPage, listPage, tagPage, notFoundPage, tagSlug, feedWeight } from "./lib/templates.mjs";
 import { listingPages, FEED_PAGE_BYTES } from "./lib/listing.mjs";
 import { rss, sitemap, robots } from "./lib/feed.mjs";
+import { inspectHtml } from "./lib/structure.mjs";
+import { internalLinkDiagnostics, routePath } from "./lib/link-diagnostics.mjs";
+import { SITE } from "./lib/templates.mjs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 // Directory overrides let the test harness, or a local build, read posts and
@@ -191,7 +194,7 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
     copyInto(path.join(PREVIEW_FIXTURES, "assets", "images"), "images");
     copyInto(path.join(PREVIEW_FIXTURES, "assets", "posts"), "assets/posts");
   }
-  for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js"]) {
+  for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js", "compare.mjs", "export.mjs"]) {
     const file = path.join(ENGINE_ASSETS_DIR, script);
     if (fs.existsSync(file)) write(path.join("assets", script), fs.readFileSync(file));
   }
@@ -210,6 +213,35 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
   // The Distill template's <d-math> loads KaTeX from here (assets/vendor/distill.template.v2.js).
   write("assets/vendor/katex.min.js", fs.readFileSync(path.join(KATEX_DIST, "katex.min.js")));
   copyInto(path.join(KATEX_DIST, "fonts"), path.join(katexPublicRoot, "fonts"));
+
+  // Complete output exists now. Check authored links against emitted files,
+  // never the network; diagnostics do not turn a valid publication into a failure.
+  const files = new Map();
+  const scan = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) scan(file);
+      else {
+        const relative = "/" + path.relative(distDir, file).split(path.sep).join("/");
+        files.set(routePath(relative), file);
+        files.set(relative, file);
+      }
+    }
+  };
+  scan(distDir);
+  const targets = new Map();
+  for (const post of posts) {
+    const diagnostics = await internalLinkDiagnostics(post, { origin: SITE.url, resolve: async (route) => {
+      if (!targets.has(route)) {
+        const file = files.get(route);
+        targets.set(route, file
+          ? { exists: true, ids: file.endsWith(".html") ? inspectHtml(fs.readFileSync(file, "utf8")).ids : null }
+          : { exists: false });
+      }
+      return targets.get(route);
+    } });
+    for (const diagnostic of diagnostics) console.warn(`  warning /${post.slug}/: ${diagnostic.message}`);
+  }
 
   // Duration on every build, so the growth §3.3 warns about is visible before it bites.
   console.log(`Done: ${posts.length} post(s) -> ${path.relative(ROOT, distDir)}/ in ${Date.now() - started} ms`);

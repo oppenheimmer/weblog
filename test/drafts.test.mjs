@@ -255,3 +255,21 @@ test("removing a draft takes its revisions with it", async () => {
   assert.equal(await drafts.get(created.draft.postId), null);
   assert.deepEqual(await drafts.revisions(created.draft.postId), []);
 });
+test("retained history restores fields as a new conditional save without changing assets or publication ancestry", async () => {
+  const store = createStore({ config: FAKE_CONFIG, client: createFakeS3() });
+  const drafts = createDraftStore(store);
+  const first = await drafts.create({ title: "Before", body: "Original", publishedRevisionId: "r_older" });
+  const second = await drafts.save(first.draft.postId, { title: "After", body: "Edited" }, first.etag);
+  const restored = await drafts.restore(first.draft.postId, first.draft.revisionId, second.etag);
+  assert.equal(restored.draft.body, "Original");
+  assert.equal(restored.draft.version, 3);
+  assert.equal(restored.draft.publishedRevisionId, "r_older");
+  assert.equal((await drafts.history(first.draft.postId)).length, 3);
+  assert.equal((await drafts.getRevision(first.draft.postId, second.draft.revisionId)).body, "Edited");
+  await assert.rejects(() => drafts.restore(first.draft.postId, first.draft.revisionId, second.etag), ConflictError);
+  assert.equal((await drafts.get(first.draft.postId)).draft.version, 3);
+  for (const id of ["../../current", "r_x/../current", "", null]) {
+    await assert.rejects(() => drafts.getRevision(first.draft.postId, id), /Invalid revision/);
+  }
+  await assert.rejects(() => drafts.restore(first.draft.postId, "r_missing", restored.etag), /no longer retained/);
+});

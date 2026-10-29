@@ -41,6 +41,8 @@ const ROUTES = [
   [/^\/api\/publish\/$/, () => "api/publish.js"],
 ];
 const STATIC = {
+  "/assets/compare.mjs": ["assets/compare.mjs", "text/javascript"],
+  "/assets/export.mjs": ["assets/export.mjs", "text/javascript"],
   "/assets/editor.js": ["assets/editor.js", "text/javascript"],
   "/assets/blog.js": ["assets/blog.js", "text/javascript"],
   "/assets/preview-run.js": ["assets/preview-run.js", "text/javascript"],

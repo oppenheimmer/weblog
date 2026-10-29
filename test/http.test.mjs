@@ -423,3 +423,33 @@ test("every response forbids caching", async () => {
   assert.equal(res.getHeader("cache-control"), "no-store");
   assert.equal(res.getHeader("x-content-type-options"), "nosniff");
 });
+test("history, revision reads and complete export use the existing authentication and conditional-save guards", async () => {
+  const { sessions, drafts } = harness();
+  const auth = await authed(sessions);
+  const first = await drafts.create({ title: "Private history", date: "2026-10-29", body: "old" });
+  const second = await drafts.save(first.draft.postId, { body: "new" }, first.etag);
+  const url = `/api/drafts/${first.draft.postId}/`;
+  for (const suffix of ["?action=history", `?revision=${first.draft.revisionId}`, "?action=export"]) {
+    const anonymous = fakeRes();
+    await draftById(fakeReq({ url: url + suffix }), anonymous);
+    assert.equal(anonymous.statusCode, 401);
+  }
+  const history = fakeRes();
+  await draftById(fakeReq({ url: url + "?action=history", headers: { cookie: auth.cookie } }), history);
+  assert.equal(history.json().revisions.length, 2);
+  assert.equal(history.getHeader("cache-control"), "no-store");
+  const stale = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers: { cookie: auth.cookie, "x-csrf-token": auth.csrf, "if-match": first.etag }, body: { action: "restore", revisionId: first.draft.revisionId } }), stale);
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().current.body, "new");
+  const restore = fakeRes();
+  await draftById(fakeReq({ method: "PUT", url, headers: { cookie: auth.cookie, "x-csrf-token": auth.csrf, "if-match": second.etag }, body: { action: "restore", revisionId: first.draft.revisionId } }), restore);
+  assert.equal(restore.statusCode, 200);
+  assert.equal(restore.json().draft.version, 3);
+  const oldExport = fakeRes();
+  await draftById(fakeReq({ url: url + "?action=export", headers: { cookie: auth.cookie, "if-match": second.etag } }), oldExport);
+  assert.equal(oldExport.statusCode, 409);
+  const badRevision = fakeRes();
+  await draftById(fakeReq({ url: url + "?revision=../../current", headers: { cookie: auth.cookie } }), badRevision);
+  assert.equal(badRevision.statusCode, 400);
+});

@@ -42,7 +42,7 @@ const wideCode = `const ${"reallyLongIdentifier".repeat(12)} = ${"'unbreakable'"
 const wideMaths = `$$${Array.from({ length: 24 }, (_, i) => `x_{${i}}^{2}`).join(" + ")} = 1$$`;
 fs.writeFileSync(path.join(postsDir, "2026-07-08-anchors-one.md"),
   `---\ntitle: "Anchors, first"\ndate: 2026-07-08\ntags: [testing]\n---\n\n## Introduction\n\nThe first post's introduction.\n\n` +
-  `\`\`\`js\n${wideCode}\n\`\`\`\n\n${wideMaths}\n\n${filler(6)}\n`);
+  `\`\`\`js\n${wideCode}\n\`\`\`\n\n${wideMaths}\n\n${filler(6)}\n\n## Discussion\n\nMore text.\n\n### Details\n\nEnd.\n`);
 fs.writeFileSync(path.join(postsDir, "2026-07-07-anchors-two.md"),
   `---\ntitle: "Anchors, second"\ndate: 2026-07-07\ntags: [testing]\n---\n\n## Introduction\n\nThe second post's introduction.\n\n${filler(12)}\n\n[Back to the introduction](#introduction)\n`);
 fs.writeFileSync(path.join(postsDir, "2026-06-01-tall.md"),
@@ -432,6 +432,19 @@ try {
       }
       return opacity === "1" || opacity;
     });
+  });
+
+  await section("Article navigation without JavaScript:", { noScript: true, width: 390 }, async (page) => {
+    await page.goto(`${SITE}/anchors-one/`);
+    await check("the contents list names real sections and clicking navigates without scripts", async () => {
+      const valid = await page.eval('[...document.querySelectorAll(".article-toc a")].length === 3 && [...document.querySelectorAll(".article-toc a")].every(a => document.getElementById(decodeURIComponent(new URL(a.href).hash.slice(1))))');
+      await page.click('.article-toc a[href="#details"]');
+      const reached = await page.eval('location.hash === "#details"');
+      return valid && reached;
+    });
+    await check("contents navigation fits a phone", async () => await page.eval('document.documentElement.scrollWidth <= innerWidth + 1'));
+    await page.goto(`${SITE}/`);
+    await check("listing articles omit their contents lists", async () => await page.eval('document.querySelectorAll(".article-toc").length === 0'));
   });
 
   await section("Reduced motion:", { reducedMotion: true }, async (page) => {

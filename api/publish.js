@@ -15,6 +15,7 @@ import { createDraftStore, normalizeDraftInput, DraftError } from "../lib/server
 import { createPublisher, PublishError } from "../lib/server/publish.mjs";
 import { readSiteManifest, siteStatus } from "../lib/server/deployments.mjs";
 import { route, readJsonBody, sendJson, sendError } from "../lib/server/http.mjs";
+import { publicationReview } from "../lib/server/review.mjs";
 
 // `fireDeployHook`, `readManifest` and `housekeep` come from the context only in
 // tests; in production the real hook fires, the real site is read, and the real
@@ -46,6 +47,16 @@ export default route(async ({ req, res, requestId, store, annotate, fireDeployHo
     const body = await readJsonBody(req);
     const action = body?.action ?? "publish";
     annotate({ action, postId: body?.postId });
+
+    if (action === "review") {
+      const fields = normalizeDraftInput(body ?? {});
+      const found = body.postId ? await createDraftStore(store).get(body.postId) : null;
+      if (body.postId && !found) return sendError(res, 404, "not_found", "No such draft.", { requestId });
+      return sendJson(res, 200, await publicationReview({
+        store, publisher, readManifest, baseline: body.baseline ?? "latest",
+        draft: { ...fields, postId: body.postId ?? null, publishedRevisionId: found?.draft.publishedRevisionId ?? null },
+      }));
+    }
 
     // Read-only, so it answers even where publishing is disabled — and says so.
     // The fields are the ones on screen, as preview takes them, because Publish

@@ -428,6 +428,14 @@ request before a function starts.
 Git holds no content, so R2 is the only copy. Take dated backups with a
 **separate read-only** R2 token that never goes into Vercel.
 
+For an individual post, **Export complete post** in the editor downloads source
+and current verified assets as a ZIP. The browser assembles the package from
+authenticated same-origin chunks of at most 1 MiB, verifies every file hash,
+and downloads only after all files pass. This needs no new R2 CORS permission.
+It preserves source references with a mapping manifest and includes no signed
+URLs or credentials. It does not include retained history or operational
+records; keep the dated bucket backups below for full recovery.
+
 Configure the remote once (`rclone config`, or write it directly):
 
 ```ini
@@ -536,6 +544,7 @@ recorded, which points at the deployment list.
 node scripts/verify-listing.mjs          # feed and table: keyboard, phones, no JS
 node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
+node scripts/verify-authoring.mjs        # history, publication comparisons, link warnings and a real ZIP download
 node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
 node scripts/verify-editor-interactives.mjs  # attach, replace and remove folders; Run preview stays out of the editor
 ```
@@ -603,6 +612,7 @@ Installed by `npm install`; pinned in `package.json`:
   — the pure-JavaScript LaTeX → HTML pipeline
 - `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner` — R2 over its
   S3-compatible API, including presigned upload URLs
+- `parse5` — parse rendered HTML for section navigation and local link checks
 
 The only runtime assets shipped to readers are the small `assets/blog.js`
 (mobile nav, feed/table switch, clickable rows, scroll reveal) and any per-post

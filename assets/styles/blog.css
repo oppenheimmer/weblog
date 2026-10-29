@@ -685,3 +685,7 @@ body.post-page { --bg: #ffffff; }
     .interactive--figure.interactive--live .interactive-root { display: none; }
     .interactive--figure.interactive--live .interactive-fallback { display: block; }
 }
+.article-toc { margin: 1.5rem 0; padding: 1rem 1.25rem; border: 1px solid #b8c5ce; border-radius: .5rem; background: #f6f8fa; }
+.article-toc h2 { margin: 0 0 .5rem; font-size: 1rem; }
+.article-toc ol { margin: .25rem 0; padding-left: 1.4rem; }
+.article-toc a { overflow-wrap: anywhere; }

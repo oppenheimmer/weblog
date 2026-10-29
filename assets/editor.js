@@ -4,6 +4,9 @@
 // conditional saves, attachments uploaded straight to storage, a preview
 // rendered by the server into a sandboxed frame, and what the site actually
 // shows of each published post.
+import { fieldChanges, diffLines, assetChanges } from "./compare.mjs";
+import { createZip, sourceDocument, verifyExportFile, EXPORT_CHUNK_BYTES } from "./export.mjs";
+
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -30,6 +33,12 @@ const els = {
     rebuildNote: $("rebuild-note"),
     attachLab: $("attach-lab"), attachFigure: $("attach-figure"), interactiveInput: $("interactive-input"),
     interactiveList: $("interactive-list"), interactiveStatus: $("interactive-status"), previewRun: $("preview-run"),
+    historyPanel: $("history-panel"), historyRefresh: $("history-refresh"), historyRevision: $("history-revision"),
+    historyCompare: $("history-compare"), historyRestore: $("history-restore"), historyNote: $("history-note"),
+    comparison: $("comparison"), comparisonLabel: $("comparison-label"), comparisonFields: $("comparison-fields"),
+    comparisonNote: $("comparison-note"), comparisonBody: $("comparison-body"), comparisonClose: $("comparison-close"),
+    reviewBaseline: $("review-baseline"), reviewChanges: $("review-changes"), reviewNote: $("review-note"),
+    exportPackage: $("export-package"), exportNote: $("export-note"),
 };
 
 const state = {
@@ -311,6 +320,7 @@ async function loadDraft(draft, etag) {
     state.etag = etag;
     state.version = draft.version;
     state.selected = null;
+    resetComparison();
     writeForm(draft);
     for (const name of FIELDS) clearInvalid(els[name]);
     state.saved = readForm();
@@ -331,6 +341,7 @@ async function newPost() {
     state.etag = null;
     state.version = null;
     state.selected = null;
+    resetComparison();
     writeForm({ date: new Date().toISOString().slice(0, 10) });
     for (const name of FIELDS) clearInvalid(els[name]);
     state.saved = readForm();
@@ -438,6 +449,130 @@ async function save({ force = false, automatic = false } = {}) {
     if (automatic && saved && !isDirty()) setStatus(`autosaved · v${state.version}`);
     return saved;
 }
+
+// ---------------------------------------------------------------- history and comparison
+
+function resetComparison() {
+    els.comparison.hidden = true;
+    els.historyRevision.replaceChildren();
+    writeText(els.historyNote, "Refresh saves to load this draft’s retained history.");
+    writeText(els.reviewNote, "");
+}
+
+const comparisonSnapshot = () => JSON.stringify([readForm(), state.postId,
+    state.attachments.map((a) => [a.id, a.sha256]), state.interactives.map((b) => [b.id, b.revisionId])]);
+
+function invalidateComparison() {
+    if (!els.comparison.hidden && state.comparisonSnapshot !== comparisonSnapshot()) {
+        els.comparison.hidden = true;
+        writeText(els.reviewNote, "Text or attachments changed. Compare again to review the current state.");
+    }
+}
+
+async function refreshHistory() {
+    const postId = state.postId;
+    if (!postId) { writeText(els.historyNote, "Save this post to start its history."); return; }
+    const { data } = await api(`/api/drafts/${postId}/?action=history`);
+    if (postId !== state.postId) return;
+    const previous = els.historyRevision.value;
+    els.historyRevision.replaceChildren(...data.revisions.map((revision) => {
+        const option = document.createElement("option");
+        option.value = revision.revisionId;
+        option.textContent = `v${revision.version} · ${formatWhen(revision.updatedAt)} · ${revision.title || "Untitled"}`;
+        return option;
+    }));
+    if (data.revisions.some((r) => r.revisionId === previous)) els.historyRevision.value = previous;
+    writeText(els.historyNote, `${data.revisions.length} retained save(s). Deleted attachments may need relinking after restore.`);
+}
+
+function showComparison(before, after, label, assets = []) {
+    state.comparisonReturn = document.activeElement;
+    state.comparisonSnapshot = comparisonSnapshot();
+    els.comparisonLabel.textContent = label;
+    const changes = fieldChanges(before, after);
+    els.comparisonFields.replaceChildren(...[
+        ...changes.map(({ name, before, after }) => `${name}: ${JSON.stringify(before)} → ${JSON.stringify(after)}`),
+        ...assets,
+    ].map((text) => { const li = document.createElement("li"); li.textContent = text; return li; }));
+    const diff = diffLines(before.body ?? "", after.body ?? "");
+    els.comparisonBody.replaceChildren(...diff.rows.map(({ kind, text }) => {
+        const line = document.createElement("span");
+        line.className = `diff-${kind}`;
+        line.textContent = `${kind === "added" ? "+" : kind === "removed" ? "−" : " "} ${text}\n`;
+        return line;
+    }));
+    els.comparisonNote.textContent = (diff.shortened ? "Comparison shortened for a large change. " : "") +
+        (diff.changed ? "Source changes below. + added, − removed." : "No source changes.") +
+        (!changes.length && !assets.length ? " No metadata or asset changes." : "");
+    els.comparison.hidden = false;
+}
+
+async function compareHistory() {
+    const postId = state.postId, revisionId = els.historyRevision.value;
+    if (!postId || !revisionId) { await refreshHistory(); return; }
+    const { data } = await api(`/api/drafts/${postId}/?revision=${encodeURIComponent(revisionId)}`);
+    if (postId !== state.postId) return;
+    showComparison(data.draft, readForm(), `Retained draft v${data.draft.version} → current text on screen`);
+}
+
+async function restoreHistory() {
+    if (isBusy(els.historyRestore)) return;
+    const postId = state.postId, revisionId = els.historyRevision.value;
+    if (!postId || !revisionId) return;
+    if (!confirm("Save the current text, then restore this revision as a new save? Attachments and publications keep their current state.")) return;
+    if (state.savePromise) await state.savePromise;
+    if (isDirty() && (!(await save()) || isDirty())) return;
+    if (postId !== state.postId) return;
+    stopAutosave();
+    const snapshot = JSON.stringify(readForm());
+    setBusy(els.historyRestore, true);
+    try {
+        const { res, data } = await api(`/api/drafts/${postId}/`, {
+            method: "PUT", etag: state.etag, conflict: true, body: { action: "restore", revisionId },
+        });
+        if (postId !== state.postId) return;
+        if (res.status === 409) {
+            state.conflict = { etag: data.etag, draft: data.current };
+            describeConflict(data.current); openConflict();
+            setStatus("conflict", "error");
+            writeText(els.historyNote, "Restore stopped because another save won. Resolve the conflict, then choose Restore again.");
+            return;
+        }
+        if (snapshot === JSON.stringify(readForm())) await loadDraft(data.draft, data.etag);
+        else {
+            state.etag = data.etag; state.version = data.draft.version;
+            state.saved = Object.fromEntries(FIELDS.map((name) => [name, data.draft[name]]));
+            scheduleAutosave();
+        }
+        await refreshHistory();
+        setStatus(`restored as v${data.draft.version}${isDirty() ? " · newer typing unsaved" : ""}`);
+        writeText(els.historyNote, "Text and fields restored. Check Preview for references that need relinking.");
+        scheduleReadiness(); schedulePreview({ force: true });
+    } finally { setBusy(els.historyRestore, false); }
+}
+
+els.historyPanel.addEventListener("toggle", guard(async () => { if (els.historyPanel.open) await refreshHistory(); }));
+els.historyRefresh.addEventListener("click", guard(refreshHistory));
+els.historyCompare.addEventListener("click", guard(compareHistory));
+els.historyRestore.addEventListener("click", guard(restoreHistory));
+els.comparisonClose.addEventListener("click", () => { els.comparison.hidden = true; state.comparisonReturn?.focus(); });
+
+els.reviewChanges.addEventListener("click", guard(async () => {
+    if (isBusy(els.reviewChanges)) return;
+    const postId = state.postId, snapshot = comparisonSnapshot();
+    setBusy(els.reviewChanges, true);
+    try {
+        const { data } = await api("/api/publish/", { method: "POST", body: {
+            ...readForm(), postId, action: "review", baseline: els.reviewBaseline.value,
+        } });
+        if (postId !== state.postId || snapshot !== comparisonSnapshot()) {
+            writeText(els.reviewNote, "The text changed while checking. Review changes again."); return;
+        }
+        if (!data.available) { writeText(els.reviewNote, data.reason); return; }
+        showComparison(data.before ?? {}, data.after, data.label, assetChanges(data.before ?? {}, data.after));
+        writeText(els.reviewNote, "Comparison ready. Review again after further edits or attachment changes.");
+    } finally { setBusy(els.reviewChanges, false); }
+}));
 
 // ---------------------------------------------------------------- attachments
 
@@ -682,6 +817,7 @@ async function loadAttachments() {
         state.attachments = data.attachments ?? [];
     }
     renderAttachments();
+    invalidateComparison();
 }
 
 function renderAttachments() {
@@ -911,6 +1047,7 @@ async function loadInteractives() {
         state.interactives = [...newest.values()];
     }
     renderInteractives();
+    invalidateComparison();
 }
 
 /** Put an earlier stored revision back as the one the post publishes. */
@@ -1661,17 +1798,7 @@ els.discard.addEventListener("click", guard(async () => {
 // A local escape hatch that never depends on the network or the session.
 els.exportBtn.addEventListener("click", () => {
     const f = readForm();
-    const front = [
-        "---",
-        `title: ${JSON.stringify(f.title)}`,
-        `date: ${f.date}`,
-        f.description ? `description: ${JSON.stringify(f.description)}` : null,
-        f.tags.length ? `tags: [${f.tags.join(", ")}]` : null,
-        "---",
-        "",
-    ].filter(Boolean).join("\n");
-
-    const blob = new Blob([front + f.body + "\n"], { type: "text/plain" });
+    const blob = new Blob([sourceDocument(f)], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1679,6 +1806,49 @@ els.exportBtn.addEventListener("click", () => {
     link.click();
     URL.revokeObjectURL(url);
 });
+
+els.exportPackage.addEventListener("click", guard(async () => {
+    if (isBusy(els.exportPackage)) return;
+    setBusy(els.exportPackage, true);
+    try {
+        if (state.savePromise) await state.savePromise;
+        if (!state.postId || isDirty()) {
+            if (!(await save()) || isDirty()) throw new Error("Save the current changes before exporting a complete post. Export source is always available.");
+        }
+        const postId = state.postId;
+        const { data } = await api(`/api/drafts/${postId}/?action=export`, { etag: state.etag });
+        const encoder = new TextEncoder();
+        const files = data.virtual.map((file) => ({ path: file.path, bytes: encoder.encode(file.text) }));
+        let completed = 0;
+        for (const file of data.files) {
+            writeText(els.exportNote, `Downloading ${++completed} of ${data.files.length}: ${file.path}`);
+            const chunks = [];
+            for (let offset = 0; offset < Math.max(1, file.bytes); offset += EXPORT_CHUNK_BYTES) {
+                const query = new URLSearchParams({ action: "export-file", file: file.token, offset: String(offset) });
+                const response = await fetch(`/api/drafts/${postId}/?${query}`, { credentials: "same-origin", cache: "no-store" });
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(error.message || "An export file could not be downloaded. Sign in and try again; Export source remains available.");
+                }
+                const bytes = await response.arrayBuffer();
+                if (bytes.byteLength !== Math.min(EXPORT_CHUNK_BYTES, file.bytes - offset)) throw new Error(`Incomplete export file: ${file.path}`);
+                chunks.push(bytes);
+            }
+            const blob = new Blob(chunks);
+            await verifyExportFile(blob, file);
+            files.push({ path: file.path, bytes: blob });
+        }
+        writeText(els.exportNote, "Creating ZIP…");
+        const blob = await createZip(files);
+        const url = URL.createObjectURL(blob), link = document.createElement("a");
+        link.href = url; link.download = data.filename; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        writeText(els.exportNote, `Exported saved v${data.version} with ${data.files.length} verified asset file(s).`);
+    } catch (err) {
+        writeText(els.exportNote, "Complete export stopped. No partial ZIP was downloaded; Export source remains available.");
+        throw err;
+    } finally { setBusy(els.exportPackage, false); }
+}));
 
 els.logout.addEventListener("click", guard(async () => {
     if (isDirty() && !confirm("This draft has unsaved changes. Sign out anyway?")) return;
@@ -1739,6 +1909,7 @@ els.conflictTheirs.addEventListener("click", guard(async () => {
 
 for (const id of FIELDS) {
     els[id].addEventListener("input", () => {
+        invalidateComparison();
         clearInvalid(els[id]);
         if (id === "title" || id === "slug") updateSlugPreview();
         if (isDirty()) setStatus("unsaved");

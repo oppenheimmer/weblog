@@ -9,6 +9,7 @@
 import { createDraftStore } from "../../../lib/server/drafts.mjs";
 import { ConflictError } from "../../../lib/server/r2.mjs";
 import { route, readJsonBody, sendJson, sendError } from "../../../lib/server/http.mjs";
+import { postExportManifest, exportFileChunk } from "../../../lib/server/export.mjs";
 
 export default route(async ({ req, res, requestId, store, annotate }) => {
   const drafts = createDraftStore(store);
@@ -17,6 +18,22 @@ export default route(async ({ req, res, requestId, store, annotate }) => {
   annotate({ postId });
 
   if (req.method === "GET") {
+    const query = new URL(req.url, "http://x").searchParams;
+    if (query.get("action") === "export") return sendJson(res, 200, await postExportManifest(store, postId, { etag: req.headers?.["if-match"] }));
+    if (query.get("action") === "export-file") {
+      const bytes = await exportFileChunk(store, postId, query.get("file"), Number(query.get("offset") ?? 0));
+      res.setHeader("content-type", "application/octet-stream");
+      res.setHeader("content-disposition", 'attachment; filename="export-part.bin"');
+      return res.end(bytes);
+    }
+    if (query.get("action") === "history") {
+      return sendJson(res, 200, { revisions: await drafts.history(postId) });
+    }
+    if (query.has("revision")) {
+      const draft = await drafts.getRevision(postId, query.get("revision"));
+      if (!draft) return sendError(res, 404, "not_found", "That draft revision is no longer retained.", { requestId });
+      return sendJson(res, 200, { draft });
+    }
     const found = await drafts.get(postId);
     if (!found) return sendError(res, 404, "not_found", "No such draft.", { requestId });
     res.setHeader("etag", found.etag);
@@ -38,7 +55,9 @@ export default route(async ({ req, res, requestId, store, annotate }) => {
   }
 
   try {
-    const saved = await drafts.save(postId, body ?? {}, etag);
+    const saved = body?.action === "restore"
+      ? await drafts.restore(postId, body.revisionId, etag)
+      : await drafts.save(postId, body ?? {}, etag);
     annotate({ action: "save", revisionId: saved.draft.revisionId });
     res.setHeader("etag", saved.etag);
     return sendJson(res, 200, saved);

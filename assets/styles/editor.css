@@ -301,3 +301,11 @@
     .editor-fields { grid-template-columns: minmax(0, 1fr); }
     .relink { grid-template-columns: minmax(0, 1fr); }
 }
+.authoring-tools { margin: 1rem 0; padding: 1rem; border: 1px solid var(--line, #a9b8c1); border-radius: .6rem; }
+.authoring-tools summary { cursor: pointer; font-weight: 700; }
+.authoring-tools .field { min-width: 0; }
+.authoring-tools select { max-width: 100%; }
+.source-diff { max-height: 28rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.source-diff span { display: block; }
+.diff-added { background: #e1f2e3; color: #15451e; }
+.diff-removed { background: #fae3e3; color: #702020; }

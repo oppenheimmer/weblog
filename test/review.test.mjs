@@ -1,0 +1,34 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createStore } from "../lib/server/r2.mjs";
+import { createDraftStore } from "../lib/server/drafts.mjs";
+import { createPublisher } from "../lib/server/publish.mjs";
+import { publicationReview } from "../lib/server/review.mjs";
+import { createFakeS3, FAKE_CONFIG } from "./helpers/fake-r2.mjs";
+
+test("review distinguishes live, latest and unavailable baselines without writes", async () => {
+  const client = createFakeS3();
+  const store = createStore({ config: FAKE_CONFIG, client });
+  const drafts = createDraftStore(store);
+  const publisher = createPublisher(store, { fireDeployHook: async () => ({}), housekeep: async () => ({}) });
+  const first = await drafts.create({ title: "Review", date: "2026-10-29", body: "Live" });
+  await publisher.publish(first.draft);
+  const latest = await drafts.save(first.draft.postId, { body: "Published" }, first.etag);
+  await publisher.publish(latest.draft);
+  const draft = { ...latest.draft, body: "On screen" };
+  const readManifest = async () => ({ ok: true, posts: [{ postId: draft.postId, revisionId: first.draft.revisionId }] });
+  const snapshot = () => [...client.objects.entries()].map(([key, v]) => [key, v.body.toString("base64")]);
+  const saved = snapshot();
+  const options = { store, publisher, draft, readManifest };
+  const live = await publicationReview({ ...options, baseline: "live" });
+  assert.equal(live.before.body, "Live");
+  assert.equal(live.after.body, "On screen");
+  assert.match(live.label, /currently live/);
+  const current = await publicationReview({ ...options, baseline: "latest" });
+  assert.equal(current.before.body, "Published");
+  const unknown = await publicationReview({ ...options, baseline: "live", readManifest: async () => ({ ok: false, reason: "timeout" }) });
+  assert.equal(unknown.available, false);
+  assert.match(unknown.reason, /timeout/);
+  assert.deepEqual(snapshot(), saved);
+  await assert.rejects(() => publicationReview({ ...options, baseline: "r_evil" }), /Choose/);
+});

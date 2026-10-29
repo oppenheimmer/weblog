@@ -105,6 +105,9 @@ jobs:
       - name: The publication panel, against a stand-in site
         run: node scripts/verify-editor.mjs
 
+      - name: Draft history, publication comparisons and complete exports
+        run: node scripts/verify-authoring.mjs
+
       # A real file drop and a real clipboard paste, then the editor by
       # keyboard and through its accessibility tree. Exits 2 if the runner's
       # browser cannot hold an image on its clipboard.

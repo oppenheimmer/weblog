@@ -36,6 +36,17 @@ terminal step.
 - **Saving.** Changes autosave after a moment of quiet; **Save** (Ctrl/Cmd-S)
   saves now. If another tab saved the same draft, a dialog asks which to keep.
   **Export source** downloads the text, even after the session has ended.
+- **Draft history** lists retained saves. Compare one with the current text,
+  or **Restore as new save** to save its text and fields as a new version.
+  Current work is saved first; a conflicting save is reported. Attachments,
+  interactive revisions and the live publication keep their current state, so
+  an old reference may need relinking. History follows the existing retention
+  window of 30 days or 20 revisions.
+- **Review changes before publishing** compares text, metadata, images and
+  interactive revisions against **Latest publication** in R2 or **Currently
+  live**, read from the served manifest. These can be different revisions.
+  Attachment references and snippets are expanded for comparison; an
+  unavailable live baseline is reported rather than guessed.
 - **Preview** shows the post as it will publish. What Publish would refuse
   shows as an error; what would not render as written, such as a broken
   formula, shows as a warning. Warnings never block publishing.
@@ -49,6 +60,13 @@ terminal step.
 - Headings `##`–`####` get anchor links.
 - Raw HTML is shown as text, never rendered. Links accept `http`, `https`,
   `mailto` and relative URLs; images must be attachments.
+- Articles with at least three section headings get an **On this page** list
+  on their own page, including LaTeX articles. Section links work without
+  JavaScript; listings omit the contents list.
+- Preview warns about links to missing published articles or anchors. The build
+  checks local links against all emitted pages and files. These warnings do not
+  block publication, and neither check contacts external websites. Preview
+  leaves generated tag, pagination and asset routes to the build to verify.
 
 ### LaTeX
 
@@ -99,6 +117,23 @@ images keep a hairline edge.
 ---
 
 ## Publishing and the site
+
+### Exporting a complete post
+
+**Export complete post** saves the current text, then downloads a ZIP containing
+the saved source and metadata, all current verified images and snippets,
+current interactive folders, and assets inherited from a publication. Bundle
+relative paths are preserved. `manifest.json` maps engine references to the
+packaged files and records their SHA-256 hashes; `README.txt` explains the layout.
+The source retains its original engine directives and attachment references.
+
+Every file is verified before the ZIP is downloaded. Missing, changed or
+unavailable files stop the export; no partial ZIP is offered. Complete export
+needs a session and network access. **Export source** remains available offline
+and after session expiry. Retained history and bucket operational records are
+covered by the full R2 backup described in INSTALL.
+
+### Publication status
 
 **On the site** reads back what the live site is serving, rather than assuming
 a publish worked:
@@ -234,6 +269,7 @@ Browser checks need Chromium (`CHROMIUM` if it is not `chromium-browser`):
 node scripts/verify-listing.mjs              # feed and table
 node scripts/verify-preview-sandbox.mjs      # preview runs no script
 node scripts/verify-editor.mjs               # writing flow and On the site
+node scripts/verify-authoring.mjs            # history, comparisons, link warnings, complete ZIP download
 node scripts/verify-editor-access.mjs        # keyboard, drop, paste, sign-out
 node scripts/verify-editor-interactives.mjs  # folders and Run preview
 node scripts/verify-demo-sandbox.mjs         # labs sealed, figures mounted
