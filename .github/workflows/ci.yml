@@ -99,6 +99,9 @@ jobs:
       - name: Feed and table (keyboard, phones, no JS)
         run: node scripts/verify-listing.mjs
 
+      - name: Device recovery and resilient saving
+        run: node scripts/verify-recovery.mjs
+
       - name: The preview frame cannot run script
         run: node scripts/verify-preview-sandbox.mjs
 

@@ -36,6 +36,23 @@ terminal step.
 - **Saving.** Changes autosave after a moment of quiet; **Save** (Ctrl/Cmd-S)
   saves now. If another tab saved the same draft, a dialog asks which to keep.
   **Export source** downloads the text, even after the session has ended.
+- **Device recovery** keeps unsaved source and metadata in this browser,
+  including new drafts that have never reached the server. After reopening
+  online and signing in, choose **Recover**, **Compare with server**, or
+  **Discard copy**. Recovered edits still respect server conflicts. If the
+  server draft was deleted, **Recover as new draft** creates a separate post;
+  attachment references may need relinking.
+  The device status is separate from the server save status. Copies expire
+  after seven days and are limited to ten copies and 10 MiB total; a full or
+  blocked store reports the problem without evicting unexpired work. You can
+  clear copies or disable recovery, and signing out clears them across tabs.
+  Browser storage can be evicted or cleared, so it is not a backup or a promise
+  that the editor can reopen offline. R2 remains authoritative for saved work.
+- **Interrupted saves** have a 15-second request/body deadline and at most
+  three automatic retries, after 2, 4 and 8 seconds. **Save** or reconnection
+  resumes saving after an outage. Expired sessions offer sign-in in the editor
+  without losing text. New-draft retries reuse their original request identity
+  to avoid duplicates after a lost response.
 - **Draft history** lists retained saves. Compare one with the current text,
   or **Restore as new save** to save its text and fields as a new version.
   Current work is saved first; a conflicting save is reported. Attachments,
@@ -300,6 +317,7 @@ node scripts/verify-preview-sandbox.mjs      # preview runs no script
 node scripts/verify-editor.mjs               # writing flow and On the site
 node scripts/verify-authoring.mjs            # history, comparisons, link warnings, complete ZIP download
 node scripts/verify-export-reliability.mjs    # cancellation, retries, 24 MiB ZIP in phone emulation
+node scripts/verify-recovery.mjs              # real IndexedDB, reloads, outages, expired sessions and concurrent tabs
 node scripts/verify-editor-access.mjs        # keyboard, drop, paste, sign-out
 node scripts/verify-editor-interactives.mjs  # folders and Run preview
 node scripts/verify-demo-sandbox.mjs         # labs sealed, figures mounted

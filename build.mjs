@@ -194,7 +194,7 @@ export async function buildSite({ store = null, distDir = DIST } = {}) {
     copyInto(path.join(PREVIEW_FIXTURES, "assets", "images"), "images");
     copyInto(path.join(PREVIEW_FIXTURES, "assets", "posts"), "assets/posts");
   }
-  for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js", "compare.mjs", "export.mjs"]) {
+  for (const script of ["blog.js", "editor.js", "login.js", "preview-run.js", "compare.mjs", "export.mjs", "recovery.mjs"]) {
     const file = path.join(ENGINE_ASSETS_DIR, script);
     if (fs.existsSync(file)) write(path.join("assets", script), fs.readFileSync(file));
   }

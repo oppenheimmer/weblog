@@ -6,6 +6,7 @@
 // shows of each published post.
 import { fieldChanges, diffLines, assetChanges } from "./compare.mjs";
 import { createZip, sourceDocument, verifyExportFile, exportRequest, EXPORT_CHUNK_BYTES } from "./export.mjs";
+import { createRecoveryStore, newCreationId, sourceFields, sameFields, requestJson, transientSaveError, RETRY_DELAYS_MS } from "./recovery.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -56,7 +57,9 @@ const state = {
     conflict: null,
     saving: false,
     savePromise: null,
-    autosave: { timer: null },
+    autosave: { timer: null, retries: 0, paused: null, retryAt: 0 },
+    sessionEnded: false,
+    recovery: { id: crypto.randomUUID(), creation: null, timer: null, queue: Promise.resolve(), copies: [], enabled: true, leaving: false },
     attachments: [],
     attachmentAlts: new Map(),
     attachmentDetails: new Map(),
@@ -170,25 +173,36 @@ function slugify(value) {
  * itself, and only a draft save does. When every 409 came back as a success, a
  * publish refused for its address reported itself as published.
  */
-async function api(path, { method = "GET", body, etag, signal, conflict = false } = {}) {
+async function api(path, { method = "GET", body, etag, signal, conflict = false, bounded = false, authRetry = false } = {}) {
+    if (state.sessionEnded) throw new Error("unauthenticated");
     const headers = { "content-type": "application/json" };
     if (state.csrf) headers["x-csrf-token"] = state.csrf;
     if (etag) headers["if-match"] = etag;
 
-    const res = await fetch(path, {
+    const options = {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal,
-    });
+    };
+    const reply = bounded ? await requestJson(path, options) : null;
+    const res = reply?.res ?? await fetch(path, options);
 
     if (res.status === 401) {
         // The session went away. Do not silently discard what is on screen.
-        setStatus("signed out", "error");
-        setError("Your session ended. Export your text, then sign in again.");
+        endSession();
         throw new Error("unauthenticated");
     }
-    const data = await res.json().catch(() => ({}));
+    const data = reply?.data ?? await res.json().catch(() => ({}));
+    // Another tab's login can rotate the shared cookie while this tab still
+    // holds its previous CSRF token. The guard refused the mutation, so one
+    // session read and retry with the same ETag/request identity is safe.
+    if (res.status === 403 && data.code === "bad_csrf" && !authRetry) {
+        const { data: session } = await requestJson("/api/auth/session/");
+        if (!session.authenticated) { endSession(); throw new Error("unauthenticated"); }
+        state.csrf = session.csrfToken;
+        return api(path, { method, body, etag, signal, conflict, bounded, authRetry: true });
+    }
     if (!res.ok && !(conflict && res.status === 409)) {
         throw Object.assign(new Error(data.message || `Request failed (${res.status})`), { data, status: res.status });
     }
@@ -232,6 +246,183 @@ function updateSlugPreview() {
 
 const isDirty = () =>
     state.saved !== null && JSON.stringify(readForm()) !== JSON.stringify(state.saved);
+
+// ---------------------------------------------------------------- device recovery
+
+const recoveryStore = createRecoveryStore();
+const recoveryChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("weblog-editor-recovery") : null;
+let recoveryListSequence = 0;
+const localStatus = (text) => writeText($("recovery-status"), text);
+const recoveryFailure = (err) => {
+    state.recovery.available = false;
+    localStatus(`Device recovery unavailable: ${err.message} Server saving and Export source remain available.`);
+};
+
+async function refreshRecovery() {
+    const sequence = ++recoveryListSequence;
+    try {
+        const { copies, enabled, locked } = await recoveryStore.list();
+        if (sequence !== recoveryListSequence) return;
+        state.recovery.copies = copies;
+        state.recovery.enabled = enabled && !locked;
+        $("recovery-enabled").checked = enabled;
+        const selected = $("recovery-copy").value;
+        $("recovery-copy").replaceChildren(...copies.map((copy) => {
+            const option = document.createElement("option");
+            option.value = copy.id;
+            option.textContent = `${copy.fields.title || "Untitled draft"} · ${new Date(copy.updatedAt).toLocaleString()} · ${copy.postId ? "existing draft" : "new draft"}`;
+            return option;
+        }));
+        if (copies.some((copy) => copy.id === selected)) $("recovery-copy").value = selected;
+        writeText($("recovery-count"), copies.length ? `(${copies.length})` : "");
+        writeText($("recovery-note"), copies.length ? "Choose a copy to recover, compare or discard. Recovery does not publish." : "No recovery copies on this device.");
+        for (const name of ["recover", "compare", "new", "discard"]) $("recovery-" + name).disabled = !copies.length;
+    } catch (err) { recoveryFailure(err); }
+}
+
+function persistRecovery() {
+    clearTimeout(state.recovery.timer);
+    if (state.recovery.leaving || state.saved === null) return Promise.resolve(false);
+    // Capture before awaiting: switching posts or receiving a server ACK must
+    // never associate a later form with an earlier post or delete newer typing.
+    const snapshot = { id: state.recovery.id, postId: state.postId, etag: state.etag,
+        version: state.version, fields: readForm(), base: state.saved, creation: state.recovery.creation };
+    const dirty = isDirty();
+    state.recovery.queue = state.recovery.queue.then(async () => {
+        try {
+            const stored = dirty ? await recoveryStore.put(snapshot) : (await recoveryStore.remove(snapshot.id), false);
+            state.recovery.available = true;
+            if (snapshot.id === state.recovery.id && sameFields(snapshot.fields, readForm())) {
+                localStatus(stored ? "Saved on this device · server save pending" : dirty ? "Device recovery is off. Changes have not been saved on this device." : snapshot.postId ? "Server copy is up to date." : "No unsaved changes on this device.");
+            }
+            await refreshRecovery();
+            recoveryChannel?.postMessage("changed");
+            return stored;
+        } catch (err) { recoveryFailure(err); return false; }
+    });
+    return state.recovery.queue;
+}
+
+function scheduleRecovery() {
+    clearTimeout(state.recovery.timer);
+    if (isDirty() && state.recovery.enabled) localStatus("Saving recovery copy on this device…");
+    state.recovery.timer = setTimeout(persistRecovery, 200);
+}
+
+function resetSaveContext() {
+    state.conflict = null;
+    state.autosave.retries = 0;
+    state.autosave.retryAt = 0;
+    state.autosave.paused = null;
+    state.recovery.id = crypto.randomUUID();
+    state.recovery.creation = null;
+    if (state.recovery.available !== false) localStatus(state.recovery.enabled ? "Device recovery is ready for edits." : "Device recovery is off.");
+}
+
+function endSession() {
+    state.sessionEnded = true;
+    state.csrf = null;
+    stopAutosave();
+    state.autosave.paused = "auth";
+    $("reauth-form").hidden = false;
+    setStatus("signed out", "error");
+    setError("Your session ended. Sign in above to resume saving, or Export source to keep a file.");
+}
+
+// A derived slug may have been normalized on the server without changing the
+// author's empty slug input. Other authored fields must match exactly.
+function matchesServer(draft, fields) {
+    return sameFields(draft, { ...fields, slug: fields.slug || slugify(fields.title) });
+}
+
+async function recoverCopy({ asNew = false } = {}) {
+    const copy = state.recovery.copies.find((item) => item.id === $("recovery-copy").value);
+    if (!copy) return;
+    if (state.savePromise) await state.savePromise;
+    if (isDirty() && !confirm("Replace the text on this screen with the selected recovery copy?")) return;
+    if (asNew && !confirm("Recover as a separate new draft? Attachment references may need to be relinked.")) return;
+    await persistRecovery();
+    let current;
+    if (copy.postId && !asNew) ({ data: current } = await api(`/api/drafts/${copy.postId}/`, { bounded: true }));
+    state.saved = null;
+    if (current) await loadDraft(current.draft, current.etag);
+    else await newPost();
+    writeForm(copy.fields);
+    if (!asNew) {
+        state.saved = copy.base;
+        state.etag = copy.etag;
+        state.version = copy.version;
+        state.recovery.creation = copy.creation;
+    }
+    // Fork the local editing context so two tabs recovering one copy never
+    // overwrite each other's next recovery snapshot.
+    if (await persistRecovery()) await recoveryStore.remove(copy.id);
+    await refreshRecovery();
+    setStatus("recovered · server save pending");
+    if (current && current.etag !== copy.etag) {
+        state.conflict = { etag: current.etag, draft: current.draft };
+        describeConflict(current.draft); openConflict(); setStatus("conflict", "error");
+    } else { els.body.focus(); scheduleAutosave(); }
+    renderRelinking(); schedulePreview(); scheduleReadiness();
+}
+
+$("recovery-recover").addEventListener("click", guard(() => recoverCopy()));
+$("recovery-new").addEventListener("click", guard(() => recoverCopy({ asNew: true })));
+$("recovery-compare").addEventListener("click", guard(async () => {
+    const copy = state.recovery.copies.find((item) => item.id === $("recovery-copy").value);
+    if (!copy) return;
+    const current = copy.postId ? (await api(`/api/drafts/${copy.postId}/`, { bounded: true })).data.draft : copy.base;
+    showComparison(current, copy.fields, copy.postId ? "Current server draft → device recovery copy" : "New draft baseline → device recovery copy");
+}));
+$("recovery-discard").addEventListener("click", guard(async () => {
+    const id = $("recovery-copy").value;
+    if (!id || !confirm("Discard this device copy? The server draft and text on screen are kept.")) return;
+    if (id === state.recovery.id) clearTimeout(state.recovery.timer);
+    await state.recovery.queue;
+    await recoveryStore.remove(id); await refreshRecovery();
+    recoveryChannel?.postMessage("changed");
+    localStatus("Device copy discarded. Further edits can create a new copy.");
+}));
+$("recovery-clear").addEventListener("click", guard(async () => {
+    if (!confirm("Clear all recovery copies on this device? Server drafts and text on screen are kept.")) return;
+    clearTimeout(state.recovery.timer);
+    await state.recovery.queue;
+    await recoveryStore.clear(); await refreshRecovery();
+    recoveryChannel?.postMessage("changed");
+    localStatus("Device copies cleared. Further edits can create new copies.");
+}));
+$("recovery-enabled").addEventListener("change", guard(async () => {
+    const enabled = $("recovery-enabled").checked;
+    if (!enabled && !confirm("Turn off device recovery and clear its copies? Server drafts are kept.")) { $("recovery-enabled").checked = true; return; }
+    clearTimeout(state.recovery.timer);
+    await state.recovery.queue;
+    await recoveryStore.enable(enabled); await refreshRecovery();
+    recoveryChannel?.postMessage("changed");
+    if (enabled) await persistRecovery(); else localStatus("Device recovery is off.");
+}));
+recoveryChannel?.addEventListener("message", (event) => {
+    if (event.data === "logout") { state.recovery.leaving = true; clearTimeout(state.recovery.timer); endSession(); localStatus("Device copies cleared by sign out in another tab."); }
+    refreshRecovery();
+});
+
+$("reauth-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (isBusy($("reauth-submit"))) return;
+    setBusy($("reauth-submit"), true);
+    writeText($("reauth-error"), "");
+    try {
+        const { res, data } = await requestJson("/api/auth/login/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: $("reauth-password").value }) });
+        if (!res.ok) throw new Error(data.message || `Sign in failed (${res.status}).`);
+        state.csrf = data.csrfToken; state.sessionEnded = false; state.recovery.leaving = false;
+        try { await recoveryStore.unlock(); } catch (err) { recoveryFailure(err); }
+        $("reauth-form").hidden = true;
+        els.body.focus(); setError("");
+        state.autosave.paused = null; state.autosave.retries = 0; state.autosave.retryAt = 0;
+        await persistRecovery(); scheduleAutosave();
+        await refreshList(); watchSite();
+    } catch (err) { writeText($("reauth-error"), err.message); }
+    finally { $("reauth-password").value = ""; setBusy($("reauth-submit"), false); }
+});
 
 // ---------------------------------------------------------------- drafts
 
@@ -321,7 +512,9 @@ async function openDraft(postId) {
 }
 
 async function loadDraft(draft, etag) {
+    persistRecovery(); // snapshot synchronously; do not delay switching the form
     stopAutosave();
+    resetSaveContext();
     state.postId = draft.postId;
     state.etag = etag;
     state.version = draft.version;
@@ -342,7 +535,9 @@ async function loadDraft(draft, etag) {
 async function newPost() {
     if (state.savePromise) await state.savePromise;
     if (isDirty() && !confirm("This draft has unsaved changes. Discard them?")) return;
+    persistRecovery();
     stopAutosave();
+    resetSaveContext();
     state.postId = null;
     state.etag = null;
     state.version = null;
@@ -384,13 +579,16 @@ const AUTOSAVE_DEBOUNCE_MS = 1200;
 
 function scheduleAutosave() {
     stopAutosave();
-    if (!isDirty() || state.conflict) return;
-    state.autosave.timer = setTimeout(() => { save({ automatic: true }); }, AUTOSAVE_DEBOUNCE_MS);
+    if (!isDirty() || state.conflict || state.sessionEnded || state.recovery.leaving || state.autosave.paused) return;
+    const delay = Math.max(AUTOSAVE_DEBOUNCE_MS, state.autosave.retryAt - Date.now());
+    state.autosave.timer = setTimeout(() => { save({ automatic: true }); }, delay);
 }
 
 async function save({ force = false, automatic = false } = {}) {
     stopAutosave();
     if (state.saving) return state.savePromise;
+    if (state.sessionEnded || state.recovery.leaving) return false;
+    if (!automatic) { state.autosave.retries = 0; state.autosave.retryAt = 0; state.autosave.paused = null; }
     state.saving = true;
     setBusy(els.save, true);
     setStatus("saving…");
@@ -401,21 +599,39 @@ async function save({ force = false, automatic = false } = {}) {
         const fields = readForm();
 
         if (!state.postId) {
-            const { data } = await api("/api/drafts/", { method: "POST", body: fields });
+            state.recovery.creation ??= { requestId: newCreationId(), fields };
+            const first = state.recovery.creation;
+            await persistRecovery();
+            const { data } = await api("/api/drafts/", { method: "POST", body: { ...first.fields, requestId: first.requestId }, bounded: true });
             state.postId = data.draft.postId;
             state.etag = data.etag;
             state.version = data.draft.version;
-            state.saved = fields;
-            setStatus(`saved · v${data.draft.version}`);
-            await refreshList();
-            return true;
+            state.saved = first.fields;
+            state.recovery.creation = null;
+            if (data.replayed && !matchesServer(data.draft, first.fields) && !matchesServer(data.draft, fields)) {
+                state.etag = null; // no acknowledged base for this recovered POST
+                state.conflict = { etag: data.etag, draft: data.draft };
+                describeConflict(data.draft); openConflict(); setStatus("conflict", "error");
+                await persistRecovery(); return false;
+            }
+            // A retried POST uses its original body. Save subsequent typing as
+            // a conditional update after resolving that one stable identity.
+            if (sameFields(fields, first.fields) || matchesServer(data.draft, fields)) {
+                state.saved = fields;
+                state.autosave.retries = 0; state.autosave.retryAt = 0;
+                setStatus(`saved · v${data.draft.version}`);
+                await persistRecovery();
+                await refreshList().catch(() => {});
+                return true;
+            }
         }
 
+        await persistRecovery();
         const { res, data } = await api(`/api/drafts/${state.postId}/`, {
-            method: "PUT", body: fields, etag: force ? state.conflict?.etag : state.etag, conflict: true,
+            method: "PUT", body: fields, etag: force ? state.conflict?.etag : state.etag, conflict: true, bounded: true,
         });
 
-        if (res.status === 409) {
+        if (res.status === 409 && !matchesServer(data.current, fields)) {
             // Never resolve this silently: both versions are real work, and
             // which one is "newer" is genuinely ambiguous — unsaved text on this
             // screen may have been typed after the other tab hit save.
@@ -427,19 +643,36 @@ async function save({ force = false, automatic = false } = {}) {
         }
 
         state.etag = data.etag;
-        state.version = data.draft.version;
+        state.version = (data.draft ?? data.current).version;
         state.saved = fields;
         state.conflict = null;
-        setStatus(`saved · v${data.draft.version}`);
-        await refreshList();
+        state.autosave.retries = 0; state.autosave.retryAt = 0;
+        setStatus(`saved · v${state.version}`);
+        await persistRecovery();
+        await refreshList().catch(() => {});
         return true;
     } catch (err) {
         if (err.message !== "unauthenticated") {
+            // Validation refused creation before any commit. Let corrected
+            // fields form a new request; an uncertain network failure retains
+            // the original identity and frozen body instead.
+            if (!state.postId && [400, 413, 422].includes(err.status)) {
+                state.recovery.creation = null;
+                await persistRecovery();
+            }
             setStatus("not saved", "error");
             setError(err.data?.fields
                 ? Object.values(err.data.fields).join(" ")
                 : err.message);
             markInvalid(err.data?.fields, { focus: !automatic });
+            if (transientSaveError(err) && state.autosave.retries < RETRY_DELAYS_MS.length) {
+                const delay = RETRY_DELAYS_MS[state.autosave.retries++];
+                state.autosave.retryAt = Date.now() + delay;
+                setStatus(`server save interrupted · retry ${state.autosave.retries}/${RETRY_DELAYS_MS.length} in ${delay / 1000}s`, "error");
+            } else {
+                state.autosave.paused = err.data?.fields ? "validation" : "failure";
+                setError(`${els.error.textContent} Automatic saving paused. ${err.status === 410 ? "Use Device recovery → Recover as new draft." : "Choose Save to try again."}`);
+            }
         }
         return false;
       } finally {
@@ -452,7 +685,7 @@ async function save({ force = false, automatic = false } = {}) {
       }
     })();
     const saved = await state.savePromise;
-    if (automatic && saved && !isDirty()) setStatus(`autosaved · v${state.version}`);
+    if (automatic && saved && !isDirty() && !state.sessionEnded) setStatus(`autosaved · v${state.version}`);
     return saved;
 }
 
@@ -1948,7 +2181,19 @@ els.exportCancel.addEventListener("click", () => {
 });
 
 els.logout.addEventListener("click", guard(async () => {
-    if (isDirty() && !confirm("This draft has unsaved changes. Sign out anyway?")) return;
+    if ((isDirty() || state.recovery.copies.length) && !confirm(`${isDirty() ? "This draft has unsaved changes. " : ""}Sign out and clear all device recovery copies? Export any unsaved text first.`)) return;
+    state.recovery.leaving = true;
+    stopAutosave(); clearTimeout(state.recovery.timer);
+    if (state.savePromise) await state.savePromise;
+    await state.recovery.queue;
+    try { await recoveryStore.lock(); }
+    catch (err) {
+        recoveryFailure(err);
+        if (!confirm("Device copies could not be cleared. Sign out anyway? Clear this site's storage in browser settings before leaving a shared device.")) {
+            state.recovery.leaving = false; scheduleAutosave(); return;
+        }
+    }
+    recoveryChannel?.postMessage("logout");
     try { await api("/api/auth/logout/", { method: "POST" }); } catch { /* leaving regardless */ }
     window.location.href = "/login/";
 }));
@@ -2001,6 +2246,7 @@ els.conflictTheirs.addEventListener("click", guard(async () => {
         state.saved = readForm();
         state.conflict = null;
         setStatus(loaded.version ? `saved · v${loaded.version}` : "loaded saved version");
+        await persistRecovery();
     }
 }));
 
@@ -2010,6 +2256,8 @@ for (const id of FIELDS) {
         clearInvalid(els[id]);
         if (id === "title" || id === "slug") updateSlugPreview();
         if (isDirty()) setStatus("unsaved");
+        if (state.autosave.paused === "validation") state.autosave.paused = null;
+        scheduleRecovery();
         scheduleAutosave();
         schedulePreview();
         scheduleReadiness();
@@ -2102,10 +2350,17 @@ window.addEventListener("keydown", (event) => {
 // have changed: say again what Publish would do, without waiting for an edit.
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && state.csrf) scheduleReadiness();
+    if (document.visibilityState === "hidden") persistRecovery();
+});
+
+window.addEventListener("online", () => {
+    if (state.sessionEnded) return;
+    state.autosave.paused = null; state.autosave.retries = 0; state.autosave.retryAt = 0;
+    scheduleAutosave();
 });
 
 window.addEventListener("beforeunload", (event) => {
-    if (isDirty()) event.preventDefault();
+    if (isDirty() && !state.recovery.leaving) event.preventDefault();
 });
 
 // ---------------------------------------------------------------- start
@@ -2119,7 +2374,10 @@ window.addEventListener("beforeunload", (event) => {
         return;
     }
     state.csrf = session.csrfToken;
+    try { await recoveryStore.unlock(); } catch (err) { recoveryFailure(err); }
+    await refreshRecovery();
     await newPost();
+    if (state.recovery.copies.length) $("recovery-panel").open = true;
   } catch (err) {
     setStatus("failed", "error");
     setError(`Could not start the editor: ${err.message}`);

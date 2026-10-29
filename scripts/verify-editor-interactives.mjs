@@ -22,6 +22,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { startEditorHarness, ROOT, PASSWORD, sleep } from "./editor-harness.mjs";
+import { keys } from "../lib/server/keys.mjs";
+import { createDraftStore } from "../lib/server/drafts.mjs";
+import { buildInventory, collectableForPost } from "../lib/server/inventory.mjs";
 
 const CONTROL = process.argv.includes("--control");
 const GRANT_LINE = 'running ? "allow-scripts" : ""';
@@ -422,10 +425,22 @@ try {
       })`);
     return (frame.srcdoc === "" && frame.sandbox === "" && frame.rows === 0) || frame;
   });
-  await check("nothing in the bucket names the discarded post, its publication jobs included", async () => {
+  await check("discard removes source, assets and jobs, retaining only expiring content-free creation markers", async () => {
     const left = await named();
+    const allowed = [keys.draftCreation(postId), keys.draftPointer(postId)];
+    const receipt = (await harness.store.getJson(allowed[0]))?.data;
+    const marker = (await harness.store.getJson(allowed[1]))?.data;
+    const inventory = await buildInventory(harness.store);
+    const record = inventory.posts.find((p) => p.postId === postId);
+    const expired = record ? collectableForPost(record, { now: Date.now() + 9 * 86400_000 }).map((o) => o.key) : [];
+    const drafts = createDraftStore(harness.store);
     // Asserted present first, so an empty fixture cannot pass for a clean discard.
-    return (before > 0 && jobsBefore > 0 && left.length === 0) || { postId, before, jobsBefore, left };
+    return (before > 2 && jobsBefore > 0 && left.length === 2 && left.every((key) => allowed.includes(key)) &&
+      receipt?.state === "deleted" && marker?.deleted === true &&
+      Object.keys(receipt).every((key) => ["requestId", "digest", "state", "createdAt", "revisionId"].includes(key)) &&
+      Object.keys(marker).every((key) => ["schemaVersion", "postId", "deleted", "updatedAt"].includes(key)) &&
+      expired.length === 2 && expired.every((key) => allowed.includes(key)) &&
+      await drafts.get(postId) === null && !(await drafts.list()).some((d) => d.postId === postId)) || { postId, before, jobsBefore, left };
   });
 
   await check("no script error was thrown", () => scriptErrors.length === 0 || scriptErrors);

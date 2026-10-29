@@ -43,6 +43,7 @@ const ROUTES = [
 const STATIC = {
   "/assets/compare.mjs": ["assets/compare.mjs", "text/javascript"],
   "/assets/export.mjs": ["assets/export.mjs", "text/javascript"],
+  "/assets/recovery.mjs": ["assets/recovery.mjs", "text/javascript"],
   "/assets/editor.js": ["assets/editor.js", "text/javascript"],
   "/assets/blog.js": ["assets/blog.js", "text/javascript"],
   "/assets/preview-run.js": ["assets/preview-run.js", "text/javascript"],
@@ -214,8 +215,8 @@ export async function startEditorHarness({ shots = null, editorScript = (text) =
   }
 
   const pages = [];
-  async function openPage({ width = 1440, height = 900 } = {}) {
-    const { browserContextId } = await send("Target.createBrowserContext");
+  async function openPage({ width = 1440, height = 900, context } = {}) {
+    const browserContextId = context ?? (await send("Target.createBrowserContext")).browserContextId;
     const { targetId } = await send("Target.createTarget", { url: "about:blank", browserContextId });
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
     const call = (method, params) => send(method, params, sessionId);
@@ -344,7 +345,7 @@ export async function startEditorHarness({ shots = null, editorScript = (text) =
         fs.mkdirSync(shots, { recursive: true });
         fs.writeFileSync(path.join(shots, `${name}.png`), Buffer.from(data, "base64"));
       },
-      close: () => send("Target.closeTarget", { targetId }).then(() => send("Target.disposeBrowserContext", { browserContextId })),
+      close: () => send("Target.closeTarget", { targetId }).then(() => context ? undefined : send("Target.disposeBrowserContext", { browserContextId })),
     };
     pages.push(page);
     return page;

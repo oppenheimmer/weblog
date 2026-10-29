@@ -17,10 +17,10 @@ export default route(async ({ req, res, store, annotate }) => {
     res.setHeader("etag", result.etag);
     return sendJson(res, result.created ? 201 : 200, result);
   }
-  const { draft, etag } = await drafts.create(body ?? {});
+  const { draft, etag, replayed = false } = await drafts.create(body ?? {}, { requestId: body?.requestId });
   annotate({ action: "create", postId: draft.postId, revisionId: draft.revisionId });
   // The ETag is the client's token for its next save; without it the save is
   // refused rather than allowed to clobber.
   res.setHeader("etag", etag);
-  return sendJson(res, 201, { draft, etag });
+  return sendJson(res, replayed ? 200 : 201, { draft, etag, replayed });
 }, { methods: ["GET", "POST"] });

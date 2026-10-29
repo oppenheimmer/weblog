@@ -324,6 +324,33 @@ There is no repository step and no terminal step.
    after 4 seconds, then less often, up to every 30 seconds — and after 15
    minutes says the build may have failed.
 
+**Device recovery** saves unsaved source and metadata to IndexedDB after a
+short quiet period and when the tab becomes hidden. Reopen the editor online,
+sign in, and choose Recover, Compare with server, or Discard copy. Recovery
+keeps the original server version for conflict detection. Recover as new draft
+is available when the original draft was deleted; references to its attachments
+may need relinking. Device copies contain no passwords, session/CSRF tokens,
+attachment bytes or signed asset URLs.
+
+Copies expire after seven days and use at most ten entries and 10 MiB in total,
+including the baseline used for comparison. Full or unavailable browser storage
+reports a separate warning; server saves and Export source remain usable.
+Clear/disable controls are in Device recovery. Sign out clears the device copies
+and stops other open tabs from recreating them until sign-in. If browser storage
+cannot be cleared, the editor warns before leaving. Use browser site-data
+settings to remove copies from a shared device. Browser eviction, clearing site
+data, and closing before a device write finishes can still lose local edits.
+This feature does not cache the editor for offline reopening or replace backups.
+
+Source saves time out after 15 seconds, including response-body reading, and
+retry transient failures at most three times after 2, 4 and 8 seconds. Save or
+reconnection resumes a paused outage; validation, authentication and conflict
+errors require their corresponding action. An expired session offers sign-in
+without leaving the editor. Retried draft creation uses one identity and frozen
+initial request. Its content-free R2 receipt and deletion marker are collectable
+after eight days; request identities expire after seven days. No new service,
+environment variable, dependency or CORS permission is required.
+
 From the same panel: **Unpublish** takes a post off the site while keeping its
 revisions, and **Roll back** (or **Put back**) puts a stored revision on the
 site. Put back defaults to the revision last shown, including after an editor
@@ -559,6 +586,7 @@ node scripts/verify-preview-sandbox.mjs  # the preview frame cannot run script
 node scripts/verify-editor.mjs           # writing flow and On the site panel, against a stand-in site
 node scripts/verify-authoring.mjs        # history, publication comparisons, link warnings and a real ZIP download
 node scripts/verify-export-reliability.mjs # cancellation, bounded retries and a 24 MiB ZIP at phone size
+node scripts/verify-recovery.mjs         # device copies, reloads, HTTP faults, reauthentication and concurrent tabs
 node scripts/verify-editor-access.mjs    # file drop, clipboard paste, sign-out, keyboard and accessibility tree
 node scripts/verify-editor-interactives.mjs  # attach, replace and remove folders; Run preview stays out of the editor
 ```
